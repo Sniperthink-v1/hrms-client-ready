@@ -1,0 +1,111 @@
+// API Configuration
+// Update these values based on your environment
+
+import Constants from 'expo-constants';
+
+// Get API URL from environment variable or use default
+// 
+// IMPORTANT: For physical devices, you MUST set EXPO_PUBLIC_API_URL to your computer's IP address
+// Example: EXPO_PUBLIC_API_URL=http://192.168.1.100:8000
+//
+// For emulators/simulators:
+// - iOS Simulator: http://localhost:8000 (default)
+// - Android Emulator: http://10.0.2.2:8000 (set via env var)
+//
+// For production: Set to your production API URL (HTTPS)
+export const API_BASE_URL = 
+  Constants.expoConfig?.extra?.apiUrl || 
+  process.env.EXPO_PUBLIC_API_URL || 
+  'http://localhost:8000'; // Default for iOS simulator
+
+// API Endpoints
+export const API_ENDPOINTS = {
+  // Authentication
+  login: '/api/public/login/',
+  signup: '/api/public/signup/',
+  register: '/api/auth/register/',
+  refreshToken: '/api/auth/refresh/',
+  logout: '/api/auth/logout/',
+  changePassword: '/api/password-reset/change/',
+  requestPasswordReset: '/api/password-reset/request/',
+  verifyOTP: '/api/password-reset/verify/',
+  resetPassword: '/api/password-reset/reset/',
+  
+  // Invitations
+  validateInvitation: '/api/invitations/validate/',
+  acceptInvitation: '/api/invitations/accept/',
+  
+  // Session
+  sessionStatus: '/api/session/status/',
+  
+  // Tenant
+  tenantCredits: '/api/tenant/credits/',
+  
+  // Dashboard
+  dashboard: '/api/dashboard/stats/',
+  dashboardStats: '/api/salary-data/frontend_charts/',
+  
+  // Employees
+  employees: '/api/employees/',
+  employeeStats: '/api/employees/stats/',
+  employeeDirectory: '/api/employees/get_directory_data/',
+  
+  // Attendance
+  attendance: '/api/attendance/',
+  attendanceStats: '/api/attendance/stats/',
+  dailyAttendance: '/api/daily-attendance/',
+  
+  // Payroll
+  salaryData: '/api/salary-data/',
+  payrollMonthly: '/api/payroll/monthly/',
+  payrollPeriods: '/api/payroll-periods-list/',
+  payrollOverview: '/api/payroll-overview/',
+  payrollPeriodDetail: (id: string) => `/api/payroll-period-detail/${id}/`,
+  calculatedSalaries: '/api/calculated-salaries/',
+  calculatedSalaryById: (id: string) => `/api/calculated-salaries/${id}/`,
+  advancePayments: '/api/advance-payments/',
+  calculatePayroll: '/api/calculate-payroll/',
+  markSalaryPaid: '/api/mark-salary-paid/',
+  
+  // Leaves
+  leaves: '/api/leaves/',
+  leaveStats: '/api/leaves/stats/',
+  
+  // Holidays
+  holidays: '/api/holidays/',
+  upcomingHolidays: '/api/holidays/upcoming/',
+  
+  // Users
+  userInvitations: '/api/user-invitations/',
+  userProfile: '/api/user/profile/',
+  users: '/api/users/',
+  userPermissions: (userId: string) => `/api/users/${userId}/permissions/`,
+  deleteAccount: '/api/user/delete-account/',
+  
+  // Salary Configuration
+  salaryConfig: '/api/salary-config/',
+  salaryConfigUpdate: '/api/salary-config/update/',
+  
+  // Support
+  supportTickets: '/api/support/tickets/',
+  
+  // Data Upload
+  uploadSalary: '/api/upload-salary/',
+  uploadAttendance: '/api/upload-attendance/',
+  downloadSalaryTemplate: '/api/download-template/',
+  downloadAttendanceTemplate: '/api/download-attendance-template/',
+};
+
+// Storage Keys
+export const STORAGE_KEYS = {
+  ACCESS_TOKEN: 'access_token',
+  REFRESH_TOKEN: 'refresh_token',
+  SESSION_KEY: 'session_key',
+  USER: 'user',
+  TENANT: 'tenant',
+  THEME_PREFERENCE: 'theme_preference',
+};
+
+// JWT Token Settings
+export const TOKEN_REFRESH_THRESHOLD = 5 * 60 * 1000; // Refresh 5 minutes before expiry
+

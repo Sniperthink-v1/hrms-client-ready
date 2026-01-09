@@ -1,0 +1,126 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+@import './components/TimeInput.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import time input styling */
+
+
+.hide-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;             /* Chrome, Safari, Opera */
+}
+
+/* Thin scrollbar styles */
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f1f5f9;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* For horizontal scrollbars */
+.thin-scrollbar::-webkit-scrollbar:horizontal {
+  height: 6px;
+}
+
+/* Teal scrollbar styles for calendar dropdowns */
+.teal-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #0B5E59 #f1f5f9;
+}
+
+.teal-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.teal-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 2px;
+}
+
+.teal-scrollbar::-webkit-scrollbar-thumb {
+  background: #0B5E59;
+  border-radius: 2px;
+}
+
+.teal-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #074E49;
+}
+
+/* For horizontal scrollbars */
+.teal-scrollbar::-webkit-scrollbar:horizontal {
+  height: 4px;
+}
+
+/* Global Custom Scrollbar Styles - Applied to all scrollable elements */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f1f5f9;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: #64748b;
+}
+
+/* For horizontal scrollbars */
+*::-webkit-scrollbar:horizontal {
+  height: 8px;
+}
+
+/* Override for elements that should hide scrollbar */
+.hide-scrollbar,
+.hide-scrollbar * {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.hide-scrollbar::-webkit-scrollbar,
+.hide-scrollbar *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}

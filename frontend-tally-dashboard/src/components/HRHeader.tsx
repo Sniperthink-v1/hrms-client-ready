@@ -1,0 +1,483 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Search, Bell, Moon, Sun, Zap, Info } from 'lucide-react';
+import { logout } from '../services/authService';
+import { apiGet } from '../services/api';
+import ImpersonationBanner from './ImpersonationBanner';
+
+interface CreditsResponse {
+  tenant_id: number;
+  tenant_name: string;
+  credits: number;
+  is_active: boolean;
+}
+
+interface HRHeaderProps {
+  pageName?: string;
+}
+
+const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
+  const location = useLocation();
+  const tenant = JSON.parse(localStorage.getItem('tenant') || '{}');
+  
+  // Function to determine current page title and subtitle based on route
+  const getPageInfo = () => {
+    const path = location.pathname;
+    
+    // If the pageName is directly provided, try to match it
+    if (pageName) {
+      switch (pageName) {
+        case 'overview':
+          return { 
+            title: 'Dashboard Overview', 
+            subtitle: "View key metrics and performance indicators" 
+          };
+        case 'directory':
+          return { 
+            title: 'All Employees', 
+            subtitle: "View and manage all employee records" 
+          };
+        case 'add-employee':
+          return { 
+            title: 'Add New Employee', 
+            subtitle: "Create a new employee record in the system" 
+          };
+        case 'payroll':
+          return { 
+            title: 'Payroll Management', 
+            subtitle: "All employee payroll" 
+          };
+        case 'attendance-tracker':
+          return { 
+            title: 'Attendance Tracker', 
+            subtitle: "All employee attendance" 
+          };
+        case 'attendance-log':
+          return { 
+            title: 'Attendance Log', 
+            subtitle: "View detailed attendance records" 
+          };
+        case 'team':
+          return { 
+            title: 'Leave Management', 
+            subtitle: "All employee leaves" 
+          };
+        case 'data-upload':
+          return { 
+            title: 'Data Upload', 
+            subtitle: "Import and export data in bulk" 
+          };
+        case 'operations-log':
+          return { 
+            title: 'Operations Log', 
+            subtitle: "Track and review system activities" 
+          };
+        case 'settings':
+          return { 
+            title: 'Settings', 
+            subtitle: "Admin Details" 
+          };
+        case 'support':
+          return { 
+            title: 'Support', 
+            subtitle: "Get help and submit support tickets" 
+          };
+        default:
+          // Fallback to path-based detection
+          break;
+      }
+    }
+    
+    // Path-based detection (fallback)
+    if (path.includes('/hr-management/directory/add')) {
+      return { 
+        title: 'Add New Employee', 
+        subtitle: "Create a new employee record in the system" 
+      };
+    } 
+    else if (path.includes('/hr-management/team')) {
+        return {
+          title: "Team Management",
+          subtitle: "Invite and manage your team members " + tenant.name
+      };
+    }
+    else if (path.includes('/hr-management/directory')) {
+      return { 
+        title: 'All Employees', 
+        subtitle: "View and manage all employee records" 
+      };
+    } else if (path.includes('/hr-management/data-upload')) {
+      return { 
+        title: 'Data Upload', 
+        subtitle: "Import and export data in bulk" 
+      };
+    } else if (path.includes('/hr-management/operations-log')) {
+      return { 
+        title: 'Operations Log', 
+        subtitle: "Track and review system activities" 
+      };
+    } else if (path.includes('/hr-management/payroll')) {
+      return { 
+        title: 'Payroll Management', 
+        subtitle: "Process and manage employee compensation" 
+      };
+    } else if (path.includes('/hr-management/attendance-tracker')) {
+      return { 
+        title: 'Attendance Tracker', 
+        subtitle: "Monitor daily employee attendance" 
+      };
+    } else if (path.includes('/hr-management/attendance-log')) {
+      return { 
+        title: 'Attendance Log', 
+        subtitle: "View detailed attendance records" 
+      };
+    } else if (path.includes('/hr-management/leave-management')) {
+      return { 
+        title: 'Leave Management', 
+        subtitle: "Process and track employee leave requests" 
+      };
+    } else if (path.includes('/hr-management/settings')) {
+      return { 
+        title: 'Settings', 
+        subtitle: "Configure system preferences and options" 
+      }
+    } else if (path.includes('/hr-management/support')) {
+      return { 
+        title: 'Support', 
+        subtitle: "Get help and submit support tickets" 
+      };
+    } else if (path.includes('/super-admin')) {
+      return { 
+        title: 'Super Admin Dashboard', 
+        subtitle: "Manage all tenants, credits, and support tickets" 
+      };
+    } else {
+      return { 
+        title: 'Dashboard Overview', 
+        subtitle: "View key metrics and performance indicators" 
+      };
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    window.location.href = '/login';
+  };  
+
+  // Check if we're on the overview page or super admin page
+  const isOverviewPage = location.pathname === '/hr-management' || location.pathname === '/';
+  const isSuperAdminPage = location.pathname.includes('/super-admin');
+
+  // Get the page information based on current route
+  const pageInfo = getPageInfo();
+
+  // Get user info from localStorage
+  let user = null;
+  let username = '';
+  let email = '';
+  let tenantName = tenant?.name || 'Your Company';
+  let initial = '';
+  let isSuperUser = false;
+  try {
+    user = JSON.parse(localStorage.getItem('user') || '{}');
+    email = user?.email || '';
+    isSuperUser = user?.is_superuser || false;
+    if (email) {
+      username = email.split('@')[0];
+      initial = username.charAt(0).toUpperCase();
+      // Capitalize username for display
+      username = username.charAt(0).toUpperCase() + username.slice(1);
+    }
+    // Use first_name if available, otherwise use email username
+    if (user?.first_name) {
+      username = user.first_name;
+      initial = user.first_name.charAt(0).toUpperCase();
+    }
+    if (user?.tenantName) {
+      tenantName = user.tenant_name;
+    }
+    // For superusers, show "Super Admin" instead of tenant name
+    if (isSuperUser) {
+      tenantName = 'Super Admin';
+    }
+  } catch {
+    // Ignore parsing errors
+  }
+
+  // Dropdown state and ref
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [remainingCredits, setRemainingCredits] = useState<number | null>(null);
+  const [showCreditsTooltip, setShowCreditsTooltip] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const notificationRef = useRef<HTMLDivElement>(null);
+  const creditsRef = useRef<HTMLDivElement>(null);
+  
+  // Fetch remaining credits on component mount and when forced
+  const fetchCredits = async (forceRefresh = false) => {
+    try {
+      // Add a timestamp query parameter to prevent caching when force refreshing
+      const url = forceRefresh 
+        ? `/api/tenant/credits/?_t=${new Date().getTime()}`
+        : '/api/tenant/credits/';
+        
+      const response = await apiGet(url);
+      const data: CreditsResponse = await response.json();
+      
+      if (data) {
+        // Update credits if available
+        if (typeof data.credits === 'number') {
+          setRemainingCredits(data.credits);
+          // Update localStorage with fresh credits for consistency
+          const currentTenant = JSON.parse(localStorage.getItem('tenant') || '{}');
+          const updatedTenant = { ...currentTenant, credits: data.credits };
+          localStorage.setItem('tenant', JSON.stringify(updatedTenant));
+        }
+        // Handle account activation status if needed
+        if (data.is_active === false) {
+          console.log('Account is not active');
+          // Add any account deactivation logic here if needed
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching credits:', error);
+      setRemainingCredits(0);
+    }
+  };
+
+  // Initial fetch on component mount (skip for superusers)
+  useEffect(() => {
+    if (!isSuperUser) {
+      fetchCredits();
+    }
+  }, [isSuperUser]);
+
+  // Refresh credits when page becomes visible (similar to mobile app)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !isSuperUser) {
+        fetchCredits(true); // Force refresh
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isSuperUser]);
+  
+  // Add a refresh function that can be called when needed
+  const refreshCredits = () => {
+    fetchCredits(true);
+  };
+
+  // Click outside to close dropdowns
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false);
+      }
+      if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
+        setNotificationOpen(false);
+      }
+      if (creditsRef.current && !creditsRef.current.contains(event.target as Node)) {
+        setShowCreditsTooltip(false);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <>
+      <ImpersonationBanner />
+      <div className="flex justify-between items-center px-6 py-4 bg-white border-b border-gray-200 shadow-sm dark:bg-gray-900 dark:border-gray-700">
+      {/* Left section: Logo, Title and subtitle */}
+      <div className="flex items-center gap-4">
+        <div className="flex flex-col gap-1">
+          {isOverviewPage && !isSuperAdminPage ? (
+            <>
+              <h1 className="text-xl font-semibold text-black dark:text-white">Hello <span className="text-[#0B5E59] font-bold">{tenantName}</span> 👋</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {(() => {
+                  const hour = new Date().getHours()
+                  if (hour < 12) return "Good morning"
+                  if (hour < 18) return "Good afternoon"
+                  return "Good evening"
+                })()}
+              </p>
+
+            </>
+          ) : (
+            <>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-white">{pageInfo.title}</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{pageInfo.subtitle}</p>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 md:gap-4">
+        {/* Search bar - desktop */}
+        {/* <div className="relative hidden md:flex">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <Search size={18} className="text-gray-400" />
+          </div>
+          <input 
+            type="text" 
+            placeholder="Search..." 
+            className="pl-10 pr-4 py-2 w-72 bg-gray-100 rounded-lg text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#0B5E59] focus:bg-white"
+          />
+        </div> */}
+        
+        
+         <div className="flex items-center space-x-4">
+            {/* Credits Display - Hide for superusers */}
+            {!isSuperUser && remainingCredits !== null && (
+              <div 
+                ref={creditsRef}
+                className="relative"
+                onMouseEnter={() => setShowCreditsTooltip(true)}
+                onMouseLeave={() => setShowCreditsTooltip(false)}
+              >
+                <div 
+                  className={`flex items-center px-3 py-1.5 rounded-full text-sm font-medium cursor-help ${
+                    remainingCredits < 5 
+                      ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300' 
+                      : 'bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300'
+                  }`}
+                >
+                  <Zap 
+                    className={`w-4 h-4 mr-1.5 ${
+                      remainingCredits < 5 ? 'text-red-500' : 'text-teal-500'
+                    }`} 
+                  />
+                  {remainingCredits === 1 ? '1 Credit Available' : `${remainingCredits} Credits Available`}
+                  {remainingCredits < 5 && (
+                    <span className="ml-2 text-xs font-normal">
+                      (Expiring soon! Contact admin)
+                    </span>
+                  )}
+                </div>
+
+                {/* Credits Tooltip */}
+                {showCreditsTooltip && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 border border-gray-200 dark:border-gray-700 p-4">
+                    <div className="flex items-start gap-3">
+                      <Info className="w-5 h-5 text-teal-600 dark:text-teal-400 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-gray-900 dark:text-white mb-2">What are Credits?</h4>
+                        <p className="text-sm text-gray-700 dark:text-gray-300 mb-3">
+                          Credits represent <strong>days of tool access availability</strong>. Each credit equals one day of access to the HR system features and tools.
+                        </p>
+                        
+                        <div className="bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800 rounded-md p-3 mb-3">
+                          <h5 className="text-sm font-semibold text-teal-900 dark:text-teal-200 mb-2">How Credits Work:</h5>
+                          <ul className="text-sm text-teal-800 dark:text-teal-300 space-y-1">
+                            <li className="flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>One credit is deducted <strong>per day</strong> automatically</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>Deduction happens at the end of each calendar day</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>When credits reach zero, tool access will be disabled</span>
+                            </li>
+                          </ul>
+                        </div>
+
+                        <p className="text-sm text-gray-600 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 pt-3">
+                          <strong>Low Credits Warning:</strong> When you have fewer than 5 days remaining, you'll see an expiry warning. Contact your administrator to add more credits and extend your access.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Super Admin Badge */}
+            {isSuperUser && (
+              <div className="flex items-center px-3 py-1.5 rounded-full text-sm font-medium bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                <Zap className="w-4 h-4 mr-1.5 text-purple-500" />
+                Super Admin
+              </div>
+            )}
+          </div>
+
+        {/* Notifications */}
+        <div className="relative" ref={notificationRef}>
+          <button
+            className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 focus:outline-none"
+            onClick={() => setNotificationOpen(!notificationOpen)}
+          >
+            <Bell size={22} className="text-gray-600 dark:text-gray-300" />
+          </button>
+          {notificationOpen && (
+            <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg z-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+              <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="font-medium text-gray-900 dark:text-white">Notifications</h3>
+              </div>
+              <div className="max-h-80 overflow-y-auto hide-scrollbar">
+                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">No new notifications</p>
+                </div>
+              </div>
+              <div className="p-2 text-center">
+                <button className="text-sm text-[#0B5E59] hover:underline">
+                  View all notifications
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* User Profile */}
+        <div className="relative" ref={dropdownRef}>
+          <button
+            className="flex items-center gap-2 focus:outline-none"
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+          >
+            <div className="w-8 h-8 rounded-full bg-[#0B5E59] flex items-center justify-center text-white">
+              {initial}
+            </div>
+            <span className="hidden md:inline text-sm font-medium text-gray-700 dark:text-gray-300">
+              {username}
+            </span>
+          </button>
+          
+          {dropdownOpen && (
+            <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg z-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+              <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+                <p className="text-sm font-medium text-gray-900 dark:text-white">{username}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{email}</p>
+                {isSuperUser && (
+                  <p className="text-xs text-purple-600 dark:text-purple-400 font-medium mt-1">Super Administrator</p>
+                )}
+              </div>
+              <div className="py-1">
+                <button
+                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                  onClick={() => {/* Handle profile click */}}
+                >
+                  Profile Settings
+                </button>
+                <button
+                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                  onClick={logout}
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+    </>
+  );
+};
+
+export default HRHeader;
