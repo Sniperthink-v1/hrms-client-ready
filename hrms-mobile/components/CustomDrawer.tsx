@@ -1,5 +1,5 @@
 // Custom Drawer Content Component
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -76,10 +76,10 @@ export default function CustomDrawer(props: any) {
   const colors = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
 
-  const [faceAttendanceEnabled, setFaceAttendanceEnabled] = React.useState(false);
+  const [faceAttendanceEnabled, setFaceAttendanceEnabled] = useState(false);
 
   // Fetch face attendance config
-  React.useEffect(() => {
+  useEffect(() => {
     const fetchFaceAttendanceConfig = async () => {
       try {
         const response: any = await api.get(API_ENDPOINTS.faceAttendanceConfig);
@@ -137,7 +137,7 @@ export default function CustomDrawer(props: any) {
     { icon: 'dashboard', label: 'Dashboard', route: '/(drawer)/' },
     { icon: 'users', label: 'Employees', route: '/(drawer)/employees' },
     { icon: 'calendar', label: 'Attendance', route: '/(drawer)/attendance' },
-    ...(faceAttendanceEnabled ? [{ icon: 'camera', label: 'Face Attendance', route: '/(drawer)/face-attendance' }] : []),
+    ...(faceAttendanceEnabled ? [{ icon: 'camera', label: 'Face Attendance', route: '/face-attendance' }] : []),
     { icon: 'dollar', label: 'Payroll', route: '/(drawer)/payroll' },
     { icon: 'calendar-check-o', label: 'Holidays', route: '/holidays' },
     { icon: 'group', label: 'Team', route: '/team' },
@@ -185,7 +185,7 @@ export default function CustomDrawer(props: any) {
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             MAIN MENU
           </Text>
-          {menuItems.slice(0, faceAttendanceEnabled ? 5 : 4).map((item) => (
+          {menuItems.slice(0, 4).map((item) => (
             <DrawerItem
               key={item.route}
               icon={item.icon}
@@ -204,7 +204,7 @@ export default function CustomDrawer(props: any) {
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             MANAGEMENT
           </Text>
-          {menuItems.slice(faceAttendanceEnabled ? 5 : 4, faceAttendanceEnabled ? 8 : 7).map((item) => (
+          {menuItems.slice(4, 7).map((item) => (
             <DrawerItem
               key={item.route}
               icon={item.icon}
@@ -223,7 +223,7 @@ export default function CustomDrawer(props: any) {
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             OTHER
           </Text>
-          {menuItems.slice(faceAttendanceEnabled ? 8 : 7).map((item) => (
+          {menuItems.slice(7).map((item) => (
             <DrawerItem
               key={item.route}
               icon={item.icon}

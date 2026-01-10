@@ -54,6 +54,7 @@ export const API_ENDPOINTS = {
   attendance: '/api/attendance/',
   attendanceStats: '/api/attendance/stats/',
   dailyAttendance: '/api/daily-attendance/',
+  employeeAttendance: '/api/excel/daily-attendance/',
   
   // Payroll
   salaryData: '/api/salary-data/',

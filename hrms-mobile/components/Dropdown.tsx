@@ -33,6 +33,7 @@ interface DropdownProps {
   allowCustom?: boolean;
   onCustomAdd?: (value: string) => void;
   customPlaceholder?: string;
+  onRemoveOption?: (value: string) => void;
   colors?: any;
 }
 
@@ -50,6 +51,7 @@ const Dropdown: React.FC<DropdownProps> = ({
   allowCustom = false,
   onCustomAdd,
   customPlaceholder = "Enter custom value",
+  onRemoveOption,
   colors: themeColors,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -163,26 +165,36 @@ const Dropdown: React.FC<DropdownProps> = ({
                   data={filteredOptions}
                   keyExtractor={(item) => item.value}
                   renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={[
-                        styles.optionItem,
-                        item.value === value && { backgroundColor: colors.primary + '20' },
-                        item.disabled && { opacity: 0.5 }
-                      ]}
-                      onPress={() => !item.disabled && handleOptionSelect(item.value)}
-                      disabled={item.disabled}
-                    >
-                      <Text style={[
-                        styles.optionText,
-                        { color: item.value === value ? colors.primary : colors.text },
-                        item.disabled && { color: colors.textLight }
-                      ]}>
-                        {item.label}
-                      </Text>
-                      {item.value === value && (
-                        <FontAwesome name="check" size={16} color={colors.primary} />
+                    <View style={[
+                      styles.optionItem,
+                      item.value === value && { backgroundColor: colors.primary + '20' },
+                      item.disabled && { opacity: 0.5 }
+                    ]}>
+                      <TouchableOpacity
+                        style={styles.optionContent}
+                        onPress={() => !item.disabled && handleOptionSelect(item.value)}
+                        disabled={item.disabled}
+                      >
+                        <Text style={[
+                          styles.optionText,
+                          { color: item.value === value ? colors.primary : colors.text },
+                          item.disabled && { color: colors.textLight }
+                        ]}>
+                          {item.label}
+                        </Text>
+                        {item.value === value && (
+                          <FontAwesome name="check" size={16} color={colors.primary} />
+                        )}
+                      </TouchableOpacity>
+                      {onRemoveOption && !item.disabled && (
+                        <TouchableOpacity
+                          style={styles.removeButton}
+                          onPress={() => onRemoveOption(item.value)}
+                        >
+                          <FontAwesome name="times" size={14} color={colors.error || '#ef4444'} />
+                        </TouchableOpacity>
                       )}
-                    </TouchableOpacity>
+                    </View>
                   )}
                   ListEmptyComponent={
                     <View style={styles.emptyContainer}>
@@ -289,12 +301,21 @@ const styles = StyleSheet.create({
   },
   optionItem: {
     flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E5E7EB',
+  },
+  optionContent: {
+    flex: 1,
+    flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E7EB',
+  },
+  removeButton: {
+    padding: 8,
+    marginRight: 8,
   },
   optionText: {
     fontSize: 15,

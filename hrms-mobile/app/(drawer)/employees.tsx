@@ -173,10 +173,7 @@ export default function EmployeesScreen() {
   };
 
   const handleEmployeePress = (employee: EmployeeProfile) => {
-    setSelectedEmployee(employee);
-    setEditData(null);
-    setIsEditing(false);
-    setShowDetailsModal(true);
+    router.push(`/(drawer)/employee-details/${employee.employee_id}`);
   };
 
   const handleSave = async () => {
