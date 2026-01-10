@@ -4,7 +4,7 @@
 import Constants from 'expo-constants';
 
 // Get API URL from environment variable or use default
-// 
+//
 // IMPORTANT: For physical devices, you MUST set EXPO_PUBLIC_API_URL to your computer's IP address
 // Example: EXPO_PUBLIC_API_URL=http://192.168.1.100:8000
 //
@@ -13,10 +13,10 @@ import Constants from 'expo-constants';
 // - Android Emulator: http://10.0.2.2:8000 (set via env var)
 //
 // For production: Set to your production API URL (HTTPS)
-export const API_BASE_URL = 
-  Constants.expoConfig?.extra?.apiUrl || 
-  process.env.EXPO_PUBLIC_API_URL || 
-  'http://localhost:8000'; // Default for iOS simulator
+export const API_BASE_URL =
+  Constants.expoConfig?.extra?.apiUrl ||
+  process.env.EXPO_PUBLIC_API_URL ||
+  (Constants.platform?.os === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000');
 
 // API Endpoints
 export const API_ENDPOINTS = {
@@ -85,6 +85,10 @@ export const API_ENDPOINTS = {
   // Salary Configuration
   salaryConfig: '/api/salary-config/',
   salaryConfigUpdate: '/api/salary-config/update/',
+
+  // Face Attendance Configuration
+  faceAttendanceConfig: '/api/face-attendance-config/',
+  faceAttendanceConfigUpdate: '/api/face-attendance-config/update/',
   
   // Support
   supportTickets: '/api/support/tickets/',

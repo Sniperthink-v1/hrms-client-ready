@@ -20,6 +20,8 @@ import { RootState } from '@/store';
 import { logout } from '@/store/slices/authSlice';
 import { authService } from '@/services/authService';
 import { storage } from '@/utils/storage';
+import { api } from '@/services/api';
+import { API_ENDPOINTS } from '@/constants/Config';
 
 // Logo from frontend
 const LOGO_URL = 'https://raw.githubusercontent.com/sniperthink/hrms-client-ready/main/frontend-tally-dashboard/public/logo.png';
@@ -74,6 +76,24 @@ export default function CustomDrawer(props: any) {
   const colors = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
 
+  const [faceAttendanceEnabled, setFaceAttendanceEnabled] = React.useState(false);
+
+  // Fetch face attendance config
+  React.useEffect(() => {
+    const fetchFaceAttendanceConfig = async () => {
+      try {
+        const response: any = await api.get(API_ENDPOINTS.faceAttendanceConfig);
+        if (response.face_attendance_enabled !== undefined) {
+          setFaceAttendanceEnabled(response.face_attendance_enabled);
+        }
+      } catch (error) {
+        console.error('Failed to fetch face attendance config:', error);
+      }
+    };
+
+    fetchFaceAttendanceConfig();
+  }, []);
+
   const handleLogout = async () => {
     Alert.alert(
       'Logout',
@@ -117,6 +137,7 @@ export default function CustomDrawer(props: any) {
     { icon: 'dashboard', label: 'Dashboard', route: '/(drawer)/' },
     { icon: 'users', label: 'Employees', route: '/(drawer)/employees' },
     { icon: 'calendar', label: 'Attendance', route: '/(drawer)/attendance' },
+    ...(faceAttendanceEnabled ? [{ icon: 'camera', label: 'Face Attendance', route: '/(drawer)/face-attendance' }] : []),
     { icon: 'dollar', label: 'Payroll', route: '/(drawer)/payroll' },
     { icon: 'calendar-check-o', label: 'Holidays', route: '/holidays' },
     { icon: 'group', label: 'Team', route: '/team' },
@@ -164,7 +185,7 @@ export default function CustomDrawer(props: any) {
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             MAIN MENU
           </Text>
-          {menuItems.slice(0, 4).map((item) => (
+          {menuItems.slice(0, faceAttendanceEnabled ? 5 : 4).map((item) => (
             <DrawerItem
               key={item.route}
               icon={item.icon}
@@ -183,7 +204,7 @@ export default function CustomDrawer(props: any) {
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             MANAGEMENT
           </Text>
-          {menuItems.slice(4, 7).map((item) => (
+          {menuItems.slice(faceAttendanceEnabled ? 5 : 4, faceAttendanceEnabled ? 8 : 7).map((item) => (
             <DrawerItem
               key={item.route}
               icon={item.icon}
@@ -202,7 +223,7 @@ export default function CustomDrawer(props: any) {
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             OTHER
           </Text>
-          {menuItems.slice(7).map((item) => (
+          {menuItems.slice(faceAttendanceEnabled ? 8 : 7).map((item) => (
             <DrawerItem
               key={item.route}
               icon={item.icon}

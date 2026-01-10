@@ -52,7 +52,7 @@ const HRSettings: React.FC = () => {
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const [showPINSettings, setShowPINSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'holidays' | 'salary'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'holidays' | 'salary' | 'face-attendance'>('profile');
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4);
   const [breakTime, setBreakTime] = useState<number>(0.5);
   const [salaryConfigLoading, setSalaryConfigLoading] = useState(false);
@@ -60,6 +60,10 @@ const HRSettings: React.FC = () => {
   const [salaryConfigSuccess, setSalaryConfigSuccess] = useState<string | null>(null);
   const [weeklyAbsentPenaltyEnabled, setWeeklyAbsentPenaltyEnabled] = useState<boolean>(false);
   const [weeklyAbsentThreshold, setWeeklyAbsentThreshold] = useState<number>(4);
+  const [faceAttendanceEnabled, setFaceAttendanceEnabled] = useState<boolean>(false);
+  const [faceAttendanceConfigLoading, setFaceAttendanceConfigLoading] = useState(false);
+  const [faceAttendanceConfigError, setFaceAttendanceConfigError] = useState<string | null>(null);
+  const [faceAttendanceConfigSuccess, setFaceAttendanceConfigSuccess] = useState<string | null>(null);
 
   // Fetch current user info (in case localStorage is stale)
   useEffect(() => {
@@ -234,6 +238,26 @@ const HRSettings: React.FC = () => {
         .finally(() => setSalaryConfigLoading(false));
     }
   }, [isAdmin, isPayrollMaster]);
+
+  // Fetch face attendance config if user is admin or payroll master
+  useEffect(() => {
+    if (isAdmin || isPayrollMaster) {
+      setFaceAttendanceConfigLoading(true);
+      apiGet('/api/face-attendance-config/')
+        .then(res => {
+          if (!res.ok) throw new Error('Failed to fetch face attendance config');
+          return res.json();
+        })
+        .then(data => {
+          setFaceAttendanceEnabled(data.face_attendance_enabled || false);
+        })
+        .catch((err) => {
+          logger.error('Error fetching face attendance config:', err);
+          setFaceAttendanceConfigError('Failed to load face attendance configuration');
+        })
+        .finally(() => setFaceAttendanceConfigLoading(false));
+    }
+  }, [isAdmin, isPayrollMaster]);
   
   // Debug logging
   useEffect(() => {
@@ -279,6 +303,18 @@ const HRSettings: React.FC = () => {
               }`}
             >
               Salary Settings
+            </button>
+          )}
+          {(isAdmin || isPayrollMaster) && (
+            <button
+              onClick={() => setActiveTab('face-attendance')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'face-attendance'
+                  ? 'border-teal-500 text-teal-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Face Attendance
             </button>
           )}
         </nav>
@@ -615,6 +651,114 @@ const HRSettings: React.FC = () => {
               className="w-full bg-teal-600 text-white px-6 py-3 rounded-lg hover:bg-teal-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
               {salaryConfigLoading ? 'Saving...' : 'Save Configuration'}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Face Attendance Tab */}
+      {activeTab === 'face-attendance' && (isAdmin || isPayrollMaster) && (
+        <div className="bg-white rounded-lg p-8 shadow-sm max-w-2xl mx-auto">
+          <h2 className="text-xl font-bold mb-6">Face Attendance Settings</h2>
+          <p className="text-sm text-gray-600 mb-6">
+            Configure face attendance feature for this tenant. When enabled, employees can use face recognition for attendance tracking.
+          </p>
+
+          {faceAttendanceConfigError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
+              {faceAttendanceConfigError}
+            </div>
+          )}
+
+          {faceAttendanceConfigSuccess && (
+            <div className="mb-4 p-3 bg-teal-50 border border-teal-200 text-teal-700 rounded">
+              {faceAttendanceConfigSuccess}
+            </div>
+          )}
+
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setFaceAttendanceConfigLoading(true);
+              setFaceAttendanceConfigError(null);
+              setFaceAttendanceConfigSuccess(null);
+
+              try {
+                const response = await apiPost('/api/face-attendance-config/update/', {
+                  face_attendance_enabled: faceAttendanceEnabled,
+                });
+
+                if (!response.ok) {
+                  const errorData = await response.json().catch(() => ({}));
+                  throw new Error(errorData.error || 'Failed to update face attendance configuration');
+                }
+
+                const data = await response.json();
+                setFaceAttendanceConfigSuccess(data.message || 'Face attendance configuration updated successfully!');
+                // Dispatch event to notify other components
+                window.dispatchEvent(new CustomEvent('faceAttendanceConfigUpdated', {
+                  detail: {
+                    face_attendance_enabled: data.face_attendance_enabled,
+                  }
+                }));
+                setTimeout(() => setFaceAttendanceConfigSuccess(null), 3000);
+              } catch (err: any) {
+                logger.error('Error updating face attendance config:', err);
+                setFaceAttendanceConfigError(err.message || 'Failed to update face attendance configuration');
+              } finally {
+                setFaceAttendanceConfigLoading(false);
+              }
+            }}
+            className="space-y-6"
+          >
+            <div className="flex items-start justify-between mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex-1 pr-4">
+                <label className="block text-gray-700 font-medium mb-2">
+                  Enable Face Attendance
+                </label>
+                <p className="text-sm text-gray-600">
+                  Allow employees to use face recognition for attendance tracking. This feature will be available in the HR sidebar when enabled.
+                </p>
+              </div>
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => !faceAttendanceConfigLoading && setFaceAttendanceEnabled(!faceAttendanceEnabled)}
+                  disabled={faceAttendanceConfigLoading}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 ${
+                    faceAttendanceEnabled ? 'bg-teal-600' : 'bg-gray-300'
+                  } ${faceAttendanceConfigLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      faceAttendanceEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+                <span className={`ml-3 text-sm font-medium ${faceAttendanceEnabled ? 'text-teal-600' : 'text-gray-500'}`}>
+                  {faceAttendanceEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+            </div>
+
+            {faceAttendanceEnabled && (
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h3 className="text-sm font-semibold text-blue-800 mb-2">📋 Face Attendance Features:</h3>
+                <ul className="text-xs text-blue-700 space-y-1">
+                  <li>• Face recognition for check-in and check-out</li>
+                  <li>• Integration with existing attendance tracking</li>
+                  <li>• Enhanced security and accuracy</li>
+                  <li>• Available in HR sidebar when enabled</li>
+                </ul>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={faceAttendanceConfigLoading}
+              className="w-full bg-teal-600 text-white px-6 py-3 rounded-lg hover:bg-teal-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              {faceAttendanceConfigLoading ? 'Saving...' : 'Save Configuration'}
             </button>
           </form>
         </div>

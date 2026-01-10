@@ -78,6 +78,12 @@ class Tenant(models.Model):
         default=4,
         help_text="Number of present days in a week after which upcoming Sunday is treated as bonus present day (default: 4)"
     )
+
+    # Face attendance settings
+    face_attendance_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable face attendance feature for this tenant"
+    )
     
     class Meta:
         app_label = 'excel_data'

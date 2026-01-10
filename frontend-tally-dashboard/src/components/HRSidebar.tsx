@@ -1,17 +1,20 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  LayoutGrid, 
-  Users, 
-  PlusCircle, 
-  Upload, 
-  ClipboardList, 
-  CalendarCheck, 
-  CircleDollarSign, 
-  Shield, 
+import { apiGet } from '../services/api';
+import { logger } from '../utils/logger';
+import {
+  LayoutGrid,
+  Users,
+  PlusCircle,
+  Upload,
+  ClipboardList,
+  CalendarCheck,
+  CircleDollarSign,
+  Shield,
   Settings,
   MessageSquare,
-  Crown
+  Crown,
+  Camera
 } from 'lucide-react';
 
 interface HRSidebarProps {
@@ -29,13 +32,47 @@ const HRSidebar: React.FC<HRSidebarProps> = ({ activePage, onPageChange }) => {
   const isAdmin = (user?.role === 'admin' || user?.is_admin) && !isSuperUser;
   const isHRManager = user?.role === 'hr_manager' || user?.role === 'hr-manager' || false;
   const isPayrollMaster = user?.role === 'payroll_master' || false;
-  
+
+  const [faceAttendanceEnabled, setFaceAttendanceEnabled] = useState<boolean>(false);
+
+  // Fetch face attendance config
+  useEffect(() => {
+    const fetchFaceAttendanceConfig = async () => {
+      try {
+        const response = await apiGet('/api/face-attendance-config/');
+        if (response.ok) {
+          const data = await response.json();
+          setFaceAttendanceEnabled(data.face_attendance_enabled || false);
+        }
+      } catch (error) {
+        logger.error('Failed to fetch face attendance config:', error);
+      }
+    };
+
+    fetchFaceAttendanceConfig();
+  }, []);
+
+  // Listen for face attendance config updates
+  useEffect(() => {
+    const handleFaceAttendanceConfigUpdate = (event: CustomEvent) => {
+      const { face_attendance_enabled } = event.detail;
+      setFaceAttendanceEnabled(face_attendance_enabled);
+    };
+
+    window.addEventListener('faceAttendanceConfigUpdated', handleFaceAttendanceConfigUpdate as EventListener);
+
+    return () => {
+      window.removeEventListener('faceAttendanceConfigUpdated', handleFaceAttendanceConfigUpdate as EventListener);
+    };
+  }, []);
+
   const navItems = [
     { name: "Overview", icon: LayoutGrid, id: "overview", path: "/hr-management", roles: ['admin', 'payroll_master'], superUserOnly: false },
     { name: "All Employees", icon: Users, id: "directory", path: "/hr-management/directory", roles: ['admin', 'payroll_master'], superUserOnly: false },
     { name: "Add Employee", icon: PlusCircle, id: "add-employee", path: "/hr-management/directory/add", roles: ['admin', 'payroll_master'], superUserOnly: false },
     { name: "Upload Data", icon: Upload, id: "data-upload", path: "/hr-management/data-upload", roles: ['admin', 'payroll_master'], superUserOnly: false },
     { name: "Attendance Log", icon: ClipboardList, id: "attendance-log", path: "/hr-management/attendance-log", roles: ['admin', 'hr_manager', 'payroll_master'], superUserOnly: false },
+    { name: "Face Attendance", icon: Camera, id: "face-attendance", path: "/hr-management/face-attendance", roles: ['admin', 'hr_manager', 'payroll_master'], superUserOnly: false, requiresFaceAttendance: true },
     { name: "Attendance Tracker", icon: CalendarCheck, id: "attendance-tracker", path: "/hr-management/attendance-tracker", roles: ['admin', 'hr_manager', 'payroll_master'], superUserOnly: false },
     { name: "Payroll", icon: CircleDollarSign, id: "payroll", path: "/hr-management/payroll", roles: ['admin', 'payroll_master'], superUserOnly: false },
     { name: "Team Management", icon: Shield, id: "team", path: "/hr-management/team", roles: ['admin'], superUserOnly: false },
@@ -50,20 +87,25 @@ const HRSidebar: React.FC<HRSidebarProps> = ({ activePage, onPageChange }) => {
     if (item.superUserOnly) {
       return isSuperUser;
     }
-    
+
     // Superusers ONLY see the Super Admin dashboard, not regular HR management items
     if (isSuperUser) {
       return false; // Superusers don't see regular HR items
     }
-    
+
+    // Check face attendance requirement
+    if (item.requiresFaceAttendance && !faceAttendanceEnabled) {
+      return false; // Hide face attendance if not enabled
+    }
+
     // Regular admin can see everything except super admin items
     if (isAdmin) return true;
-    
+
     if (isPayrollMaster) {
       // Payroll master can see everything except Team Management
       return item.id !== 'team';
     }
-    if (isHRManager) return ['attendance-log', 'attendance-tracker', 'support', 'settings'].includes(item.id);
+    if (isHRManager) return ['attendance-log', 'attendance-tracker', 'support', 'settings'].includes(item.id) || (item.id === 'face-attendance' && faceAttendanceEnabled);
     return false; // No access for other roles
   });
 

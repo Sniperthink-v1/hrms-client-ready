@@ -52,20 +52,6 @@ export function CreditProvider({ children }: CreditProviderProps) {
     }
   }, [tenant?.credits]);
 
-  // Auto-refresh credits when app comes to foreground
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextAppState) => {
-      if (nextAppState === 'active') {
-        // App came to foreground, refresh credits
-        refreshCredits();
-      }
-    });
-
-    return () => {
-      subscription?.remove();
-    };
-  }, [refreshCredits]);
-
   // Refresh credits from API (more reliable than local storage)
   const refreshCredits = useCallback(async () => {
     try {
@@ -96,6 +82,20 @@ export function CreditProvider({ children }: CreditProviderProps) {
       console.warn('[CreditContext] Failed to read stored tenant:', fallbackError);
     }
   }, []);
+
+  // Auto-refresh credits when app comes to foreground
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        // App came to foreground, refresh credits
+        refreshCredits();
+      }
+    });
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [refreshCredits]);
 
   // Check if a route is protected (requires credits)
   const isProtectedRoute = useCallback((pathname: string): boolean => {

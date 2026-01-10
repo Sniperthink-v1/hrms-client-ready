@@ -11,6 +11,7 @@ import PayrollOverview from './components/payroll/PayrollOverview';
 
 import HRAttendanceTracker from './components/HRAttendanceTracker';
 import HRAttendanceLog from './components/HRAttendanceLog';
+import HRDailyCheckLog from './components/HRDailyCheckLog';
 import HRLeaveManagement from './components/HRLeaveManagement';
 import HRSettings from './components/HRSettings';
 import HREmployeeDetails from './components/HREmployeeDetails';
@@ -411,6 +412,8 @@ function AppContent({ dark, setDark }: { dark: boolean; setDark: (v: boolean) =>
       setActivePage('attendance-tracker');
     } else if (location.pathname === '/hr-management/attendance-log') {
       setActivePage('attendance-log');
+    } else if (location.pathname === '/hr-management/face-attendance') {
+      setActivePage('face-attendance');
     } else if (location.pathname === '/hr-management/leave-management') {
       setActivePage('leave-management');
     } else if (location.pathname === '/hr-management/settings') {
@@ -900,6 +903,8 @@ function AppContent({ dark, setDark }: { dark: boolean; setDark: (v: boolean) =>
                         {/* Attendance Tracker Route */}
                         <Route path="/hr-management/attendance-tracker" element={<HRAttendanceTracker />} />
                 <Route path="/hr-management/attendance-log" element={<HRAttendanceLog />} />
+                        {/* Face Attendance Route - Shows Daily Check Log */}
+                        <Route path="/hr-management/face-attendance" element={<HRDailyCheckLog />} />
                         {/* Leave Management Route */}
                         <Route path="/hr-management/leave-management" element={<HRLeaveManagement />} />
                         {/* Data Upload Route */}

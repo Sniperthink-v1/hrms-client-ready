@@ -448,6 +448,67 @@ def update_salary_config(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def get_face_attendance_config(request):
+    """
+    Get face attendance configuration for the tenant
+    """
+    try:
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({'error': 'No tenant found'}, status=400)
+
+        return Response({
+            'face_attendance_enabled': bool(tenant.face_attendance_enabled),
+            'description': 'Face attendance configuration for this tenant'
+        })
+    except Exception as e:
+        logger.error(f"Error getting face attendance config: {str(e)}", exc_info=True)
+        return Response({'error': f'Failed to get config: {str(e)}'}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_face_attendance_config(request):
+    """
+    Update face attendance configuration for the tenant
+    Expected payload: { "face_attendance_enabled": true }
+    """
+    try:
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({'error': 'No tenant found'}, status=400)
+
+        face_attendance_enabled = request.data.get('face_attendance_enabled')
+        if face_attendance_enabled is None:
+            return Response({'error': 'face_attendance_enabled is required'}, status=400)
+
+        try:
+            face_attendance_enabled_bool = bool(face_attendance_enabled)
+        except (ValueError, TypeError):
+            return Response({'error': 'face_attendance_enabled must be a valid boolean'}, status=400)
+
+        tenant.face_attendance_enabled = face_attendance_enabled_bool
+        tenant.save(update_fields=['face_attendance_enabled'])
+
+        # Clear relevant caches
+        from django.core.cache import cache
+        cache_keys_to_clear = [
+            f"directory_data_{tenant.id}",
+            f"directory_data_full_{tenant.id}",
+        ]
+        for key in cache_keys_to_clear:
+            cache.delete(key)
+
+        return Response({
+            'success': True,
+            'face_attendance_enabled': bool(tenant.face_attendance_enabled),
+            'message': 'Face attendance configuration updated successfully'
+        })
+    except Exception as e:
+        logger.error(f"Error updating face attendance config: {str(e)}", exc_info=True)
+        return Response({'error': f'Failed to update config: {str(e)}'}, status=500)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def attendance_status(request):
     """
     Get attendance tracking status and information
