@@ -5172,7 +5172,7 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
         # Generate cache key based on tenant and selected date (cached per day)
-        cache_key = f"weekly_attendance_{tenant.id}_{selected_date.isoformat()}"
+        cache_key = f"weekly_attendance_v2_{tenant.id}_{selected_date.isoformat()}"
         
         # Check cache first
         cached_data = cache.get(cache_key)
@@ -5402,7 +5402,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
         # Generate cache key based on tenant and selected date (cached per day)
-        cache_key = f"weekly_attendance_{tenant.id}_{selected_date.isoformat()}"
+        cache_key = f"weekly_attendance_v2_{tenant.id}_{selected_date.isoformat()}"
         
         # Check cache first
         cached_data = cache.get(cache_key)
