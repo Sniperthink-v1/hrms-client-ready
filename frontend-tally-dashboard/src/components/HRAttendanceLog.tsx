@@ -1315,6 +1315,23 @@ const HRAttendanceLog: React.FC = () => {
     }
   }, [selectedDate, eligibleEmployees.length, attendanceEntries.size]);
 
+  // Refresh weekly attendance when returning to the tab (keeps penalty revert in sync across devices)
+  useEffect(() => {
+    const handleRefresh = () => {
+      if (document.visibilityState === 'visible' && selectedDate) {
+        fetchWeeklyAttendance(selectedDate);
+      }
+    };
+
+    window.addEventListener('focus', handleRefresh);
+    document.addEventListener('visibilitychange', handleRefresh);
+
+    return () => {
+      window.removeEventListener('focus', handleRefresh);
+      document.removeEventListener('visibilitychange', handleRefresh);
+    };
+  }, [selectedDate, fetchWeeklyAttendance]);
+
   return (
     <div className="space-y-6">
       {/* Holiday Warning Banner - Same style as Excel Upload notification */}
