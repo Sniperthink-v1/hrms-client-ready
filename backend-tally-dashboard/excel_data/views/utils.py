@@ -2315,6 +2315,14 @@ class RevertPenaltyDayView(APIView):
             setattr(daily, 'penalty_ignored', new_ignored)
             daily.save(update_fields=['penalty_ignored'])
 
+            # Invalidate weekly attendance cache for the entire week
+            from django.core.cache import cache
+            cache_keys = [
+                f"weekly_attendance_{tenant.id}_{(week_start + timedelta(days=offset)).isoformat()}"
+                for offset in range(7)
+            ]
+            cache.delete_many(cache_keys)
+
             # Compute absent count for the week excluding ignored days (for context)
             from decimal import Decimal
             absent_count = DailyAttendance.objects.filter(

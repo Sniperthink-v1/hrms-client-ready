@@ -96,7 +96,42 @@ export const attendanceService = {
     
     return await api.get(`${API_ENDPOINTS.holidays}check/?${params.toString()}`);
   },
+
+  // Fetch weekly attendance data for a specific date
+  async getWeeklyAttendance(date: string): Promise<any> {
+    const params = new URLSearchParams();
+    params.append('date', date);
+    return await api.get(`/api/attendance/weekly/?${params.toString()}`);
+  },
+
+  // Fetch employee directory data (includes off-day configs)
+  async getEmployeeDirectory(limit: number = 0, offset: number = 0): Promise<any> {
+    const params = new URLSearchParams();
+    params.append('limit', limit.toString());
+    params.append('offset', offset.toString());
+    try {
+      return await api.get(`${API_ENDPOINTS.employeeDirectory}?${params.toString()}`);
+    } catch (error) {
+      // Fallback for legacy endpoint used by web dashboard
+      return await api.get(`/api/employees/directory_data/?${params.toString()}`);
+    }
+  },
+
+  // Revert (toggle) weekly penalty for a specific employee/date
+  async revertPenalty(employeeId: string, date: string): Promise<any> {
+    return await api.post('/api/attendance-actions/revert-penalty/', {
+      employee_id: employeeId,
+      date,
+    });
+  },
+
+  // Trigger monthly summary recalculation after attendance update
+  async updateMonthlySummaries(date: string, employeeIds: string[]): Promise<any> {
+    return await api.post('/api/update-monthly-summaries/', {
+      date,
+      employee_ids: employeeIds,
+    });
+  },
 };
 
 export default attendanceService;
-

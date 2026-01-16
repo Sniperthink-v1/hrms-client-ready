@@ -5258,6 +5258,15 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
                     'Sa': None,
                     'Su': None
                 },
+                'penaltyIgnoredDays': {
+                    'M': False,
+                    'Tu': False,
+                    'W': False,
+                    'Th': False,
+                    'F': False,
+                    'Sa': False,
+                    'Su': False
+                },
                 'autoMarkedReasons': {
                     'M': None,
                     'Tu': None,
@@ -5292,6 +5301,15 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
                         'F': None,
                         'Sa': None,
                         'Su': None
+                    },
+                    'penaltyIgnoredDays': {
+                        'M': False,
+                        'Tu': False,
+                        'W': False,
+                        'Th': False,
+                        'F': False,
+                        'Sa': False,
+                        'Su': False
                     },
                     'autoMarkedReasons': {
                         'M': None,
@@ -5330,6 +5348,8 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
                         weekly_attendance[employee_id]['autoMarkedReasons'][day_abbrev] = auto_mark_reason
                 elif status_upper == 'ABSENT':
                     weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = False
+                    if bool(getattr(record, 'penalty_ignored', False)):
+                        weekly_attendance[employee_id]['penaltyIgnoredDays'][day_abbrev] = True
                 # UNMARKED or other statuses remain as null/undefined (not set)
 
         # Cache the result for 1 hour (cache per day)
@@ -5447,6 +5467,15 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     'F': None,
                     'Sa': None,
                     'Su': None
+                },
+                'penaltyIgnoredDays': {
+                    'M': False,
+                    'Tu': False,
+                    'W': False,
+                    'Th': False,
+                    'F': False,
+                    'Sa': False,
+                    'Su': False
                 }
             }
         
@@ -5473,6 +5502,15 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                         'F': False,
                         'Sa': False,
                         'Su': False
+                    },
+                    'penaltyIgnoredDays': {
+                        'M': False,
+                        'Tu': False,
+                        'W': False,
+                        'Th': False,
+                        'F': False,
+                        'Sa': False,
+                        'Su': False
                     }
                 }
 
@@ -5487,6 +5525,8 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
                 elif status_upper == 'ABSENT':
                     weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = False
+                    if bool(getattr(record, 'penalty_ignored', False)):
+                        weekly_attendance[employee_id]['penaltyIgnoredDays'][day_abbrev] = True
                 # UNMARKED or other statuses remain as null/undefined (not set)
 
         # Cache the result for 1 hour (cache per day)
@@ -7122,4 +7162,3 @@ class CacheManagementViewSet(viewsets.ViewSet):
                 'success': False,
                 'error': f'Failed to clear attendance cache: {str(e)}'
             }, status=500)
-

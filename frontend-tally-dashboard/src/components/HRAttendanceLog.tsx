@@ -72,6 +72,7 @@ interface AttendanceEntry {
   sunday_bonus?: boolean; // Indicates this present day is a Sunday bonus
   weeklyAttendance: { [day: string]: boolean }; // Example: { M: true, T: false, W: true, ... }
   autoMarkedReasons?: { [day: string]: string | null }; // Reasons for auto-marked days
+  penaltyIgnoredDays?: { [day: string]: boolean }; // Penalty ignored flags by day
   weekly_penalty_days?: number; // Weekly penalty days for the week
   employee_off_days?: { [day: string]: boolean }; // Employee off day configuration
   _shiftStart?: string;
@@ -1234,6 +1235,7 @@ const HRAttendanceLog: React.FC = () => {
           Object.entries(data).forEach(([employeeId, employeeData]: [string, any]) => {
             const weeklyAttendance = employeeData.weeklyAttendance || {};
             const autoMarkedReasons = employeeData.autoMarkedReasons || {};
+            const penaltyIgnoredDays = employeeData.penaltyIgnoredDays || {};
             const employeeOffDays = employeeOffDaysMap.get(employeeId);
             const penaltyDays = weeklyPenaltyDaysMap.get(employeeId) || 0;
             
@@ -1266,6 +1268,7 @@ const HRAttendanceLog: React.FC = () => {
                   ...existingEntry,
                   weeklyAttendance: updatedWeeklyAttendance,
                   autoMarkedReasons: updatedAutoMarkedReasons,
+                  penaltyIgnoredDays,
                   weekly_penalty_days: penaltyDays,
                   employee_off_days: employeeOffDays,
                 });
@@ -1286,6 +1289,7 @@ const HRAttendanceLog: React.FC = () => {
                 has_off_day: false,
                 weeklyAttendance: updatedWeeklyAttendance,
                 autoMarkedReasons: updatedAutoMarkedReasons,
+                penaltyIgnoredDays,
                 weekly_penalty_days: penaltyDays,
                 employee_off_days: employeeOffDays,
               });
@@ -1906,7 +1910,7 @@ const HRAttendanceLog: React.FC = () => {
                               }
                               
                               // Track if this chip was reverted locally
-                              const wasReverted = revertedPenaltyChips.has(`${employee.employee_id}-${day}`);
+                              const wasReverted = entry?.penaltyIgnoredDays?.[day] || revertedPenaltyChips.has(`${employee.employee_id}-${day}`);
 
                               // Determine chip color and tooltip based on rules:
                               // 1. Orange: Employee came on off day that is marked as penalty day (threshold breached + first off day manually marked present)
@@ -2066,6 +2070,19 @@ const HRAttendanceLog: React.FC = () => {
                   next.add(key);
                 } else {
                   next.delete(key);
+                }
+                return next;
+              });
+              setAttendanceEntries((prev) => {
+                const next = new Map(prev);
+                const entry = next.get(selectedPenaltyEmployee.employeeId);
+                if (entry) {
+                  const penaltyIgnoredDays = { ...(entry.penaltyIgnoredDays || {}) };
+                  penaltyIgnoredDays[selectedPenaltyEmployee.penaltyDayCode!] = !!newIgnored;
+                  next.set(selectedPenaltyEmployee.employeeId, {
+                    ...entry,
+                    penaltyIgnoredDays,
+                  });
                 }
                 return next;
               });

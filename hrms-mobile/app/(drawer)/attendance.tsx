@@ -1,5 +1,5 @@
 // Attendance Log Screen - Redesigned to match web dashboard
-import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,17 +13,17 @@ import {
   FlatList,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useRouter } from 'expo-router';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { setDailyRecords, setSelectedDate, setLoading } from '@/store/slices/attendanceSlice';
+import { setSelectedDate } from '@/store/slices/attendanceSlice';
 import { attendanceService } from '@/services/attendanceService';
 import { api } from '@/services/api';
 import { API_ENDPOINTS } from '@/constants/Config';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
-import { TableSkeleton, ListItemSkeleton, TrackAttendanceSkeleton } from '@/components/LoadingSkeleton';
+import { TrackAttendanceSkeleton } from '@/components/LoadingSkeleton';
+import PenaltyRevertModal from '@/components/PenaltyRevertModal';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay } from 'date-fns';
+import { format } from 'date-fns';
 import { Calendar } from 'react-native-calendars';
 
 // Employee interface
@@ -49,6 +49,7 @@ interface Employee {
   off_friday?: boolean;
   off_saturday?: boolean;
   off_sunday?: boolean;
+  sunday_bonus?: boolean;
   current_attendance?: {
     status: string;
     ot_hours: number;
@@ -72,6 +73,7 @@ interface AttendanceEntry {
   sunday_bonus?: boolean;
   weeklyAttendance: { [day: string]: boolean };
   autoMarkedReasons?: { [day: string]: string | null };
+  penaltyIgnoredDays?: { [day: string]: boolean };
   weekly_penalty_days?: number;
   employee_off_days?: { [day: string]: boolean };
   _shiftStart?: string;
@@ -798,7 +800,6 @@ const TrackAttendanceTab: React.FC<{
 TrackAttendanceTab.displayName = 'TrackAttendanceTab';
 
 export default function AttendanceScreen() {
-  const router = useRouter();
   const dispatch = useAppDispatch();
   const { dailyRecords, selectedDate, isLoading } = useAppSelector((state) => state.attendance);
   const colorScheme = useColorScheme();
@@ -831,23 +832,56 @@ export default function AttendanceScreen() {
   const [isHoliday, setIsHoliday] = useState(false);
   const [holidayInfo, setHolidayInfo] = useState<{name: string; description?: string; type: string} | null>(null);
   const [attendanceDates, setAttendanceDates] = useState<string[]>([]);
+  const [calendarMonth, setCalendarMonth] = useState<{ month: string; year: number }>(() => {
+    const now = new Date();
+    return { month: String(now.getMonth() + 1).padStart(2, '0'), year: now.getFullYear() };
+  });
+  const lastWeeklyFetchDateRef = useRef<string | null>(null);
+  const [weeklyAbsentThreshold, setWeeklyAbsentThreshold] = useState<number | null>(null);
+  const [employeeOffDaysCache, setEmployeeOffDaysCache] = useState<Map<string, { [day: string]: boolean }>>(new Map());
+  const [penaltyModalOpen, setPenaltyModalOpen] = useState(false);
+  const [selectedPenaltyEmployee, setSelectedPenaltyEmployee] = useState<{
+    employeeId: string;
+    employeeName: string;
+    weeklyAttendance: { [day: string]: boolean };
+    penaltyDayCode?: string;
+    initialPenaltyIgnored?: boolean;
+  } | null>(null);
+  const [revertedPenaltyChips, setRevertedPenaltyChips] = useState<Set<string>>(new Set());
 
   // Handle date selection
   const handleDateSelect = (date: string) => {
     dispatch(setSelectedDate(date));
     setShowDatePicker(false);
     setShowCalendar(false);
+    setRevertedPenaltyChips(new Set());
   };
 
   // Fetch attendance dates for calendar dots
   const fetchAttendanceDates = useCallback(async (month: string, year: number) => {
     try {
-      const response: any = await api.get(`/api/attendance-dates/?month=${month}&year=${year}`);
-      if (response.dates && Array.isArray(response.dates)) {
-        setAttendanceDates(response.dates);
-      }
+      const response: any = await api.get('/api/attendance/dates_with_attendance/');
+      const rawDates = Array.isArray(response)
+        ? response
+        : response.dates || response.results || response.data?.dates || [];
+      const filteredDates = rawDates.filter((dateString: string) => {
+        const [yy, mm] = String(dateString).split('-');
+        return yy === year.toString() && mm === month;
+      });
+      setAttendanceDates(filteredDates);
+      return;
     } catch (error) {
-      console.log('Attendance dates endpoint not available');
+      console.log('Attendance dates endpoint not available, trying fallback');
+    }
+
+    try {
+      const response: any = await api.get(`/api/attendance-dates/?month=${month}&year=${year}`);
+      const rawDates = Array.isArray(response)
+        ? response
+        : response.dates || response.results || response.data?.dates || [];
+      setAttendanceDates(rawDates);
+    } catch (error) {
+      console.log('Attendance dates fallback endpoint not available');
       setAttendanceDates([]);
     }
   }, []);
@@ -858,6 +892,7 @@ export default function AttendanceScreen() {
       const date = new Date(selectedDate);
       const month = (date.getMonth() + 1).toString().padStart(2, '0');
       const year = date.getFullYear();
+      setCalendarMonth({ month, year });
       fetchAttendanceDates(month, year);
     }
   }, [selectedDate, fetchAttendanceDates]);
@@ -879,20 +914,16 @@ export default function AttendanceScreen() {
       
       // STEP 1: Load initial batch of employees (fast response)
       console.log('📋 Loading initial employee data...');
-      let initialResponse;
-      try {
-        // Try progressive loading endpoint first
-        initialResponse = await api.get(`/api/eligible-employees/?date=${selectedDate}&initial=true`);
-      } catch (err: any) {
-        console.log('Progressive endpoint not available, using standard endpoint');
-        // Fallback to regular employees endpoint
-        initialResponse = await api.get(`${API_ENDPOINTS.employees}?is_active=true`);
-      }
+      const initialResponse: any = await api.get(`/api/eligible-employees/?date=${selectedDate}&initial=true`);
       
       const initialData: any = initialResponse;
-      const firstBatch = initialData.eligible_employees || initialData.results || [];
+      const firstBatch = initialData.eligible_employees || [];
       const dayNameFromAPI = initialData.day_name || '';
       const totalEmployees = initialData.total_count || firstBatch.length;
+
+      if (!Array.isArray(firstBatch) || firstBatch.length === 0) {
+        throw new Error('Eligible employees API returned no records for this date');
+      }
       
       console.log(`✅ Loaded ${firstBatch.length} of ${totalEmployees} employees`);
       
@@ -914,6 +945,24 @@ export default function AttendanceScreen() {
       }
       
       // Set initial employees immediately for instant UI update
+      const getHasOffDayForDate = (emp: any, date: string) => {
+        const flags = [
+          emp.off_monday,
+          emp.off_tuesday,
+          emp.off_wednesday,
+          emp.off_thursday,
+          emp.off_friday,
+          emp.off_saturday,
+          emp.off_sunday,
+        ];
+        const hasAnyFlag = flags.some((val) => typeof val === 'boolean');
+        if (!hasAnyFlag) return !!emp.has_off_day;
+        const dayIndex = new Date(date).getDay(); // 0=Sun..6=Sat
+        const dayMap = ['off_sunday', 'off_monday', 'off_tuesday', 'off_wednesday', 'off_thursday', 'off_friday', 'off_saturday'] as const;
+        const key = dayMap[dayIndex];
+        return !!emp[key];
+      };
+
       const employees = firstBatch.map((emp: any) => ({
         id: emp.id,
         employee_id: emp.employee_id,
@@ -925,10 +974,10 @@ export default function AttendanceScreen() {
         is_active: emp.is_active,
         shift_start_time: emp.shift_start_time || '09:00',
         shift_end_time: emp.shift_end_time || '18:00',
-        default_status: emp.default_status || 'present',
+        default_status: emp.default_status,
         late_minutes: emp.late_minutes || 0,
         ot_hours: emp.ot_hours || 0,
-        has_off_day: emp.has_off_day || false,
+        has_off_day: getHasOffDayForDate(emp, selectedDate),
         off_monday: emp.off_monday || false,
         off_tuesday: emp.off_tuesday || false,
         off_wednesday: emp.off_wednesday || false,
@@ -936,6 +985,7 @@ export default function AttendanceScreen() {
         off_friday: emp.off_friday || false,
         off_saturday: emp.off_saturday || false,
         off_sunday: emp.off_sunday || false,
+        sunday_bonus: emp.sunday_bonus || false,
         current_attendance: emp.current_attendance,
       }));
       
@@ -985,6 +1035,24 @@ export default function AttendanceScreen() {
       
       console.log(`✅ Loaded ${remainingEmployees.length} additional employees`);
       
+      const getHasOffDayForDate = (emp: any, date: string) => {
+        const flags = [
+          emp.off_monday,
+          emp.off_tuesday,
+          emp.off_wednesday,
+          emp.off_thursday,
+          emp.off_friday,
+          emp.off_saturday,
+          emp.off_sunday,
+        ];
+        const hasAnyFlag = flags.some((val) => typeof val === 'boolean');
+        if (!hasAnyFlag) return !!emp.has_off_day;
+        const dayIndex = new Date(date).getDay(); // 0=Sun..6=Sat
+        const dayMap = ['off_sunday', 'off_monday', 'off_tuesday', 'off_wednesday', 'off_thursday', 'off_friday', 'off_saturday'] as const;
+        const key = dayMap[dayIndex];
+        return !!emp[key];
+      };
+
       const allEmployees = [...initialEmployees, ...remainingEmployees.map((emp: any) => ({
         id: emp.id,
         employee_id: emp.employee_id,
@@ -996,10 +1064,18 @@ export default function AttendanceScreen() {
         is_active: emp.is_active,
         shift_start_time: emp.shift_start_time || '09:00',
         shift_end_time: emp.shift_end_time || '18:00',
-        default_status: emp.default_status || 'present',
+        default_status: emp.default_status,
         late_minutes: emp.late_minutes || 0,
         ot_hours: emp.ot_hours || 0,
-        has_off_day: emp.has_off_day || false,
+        has_off_day: getHasOffDayForDate(emp, date),
+        off_monday: emp.off_monday || false,
+        off_tuesday: emp.off_tuesday || false,
+        off_wednesday: emp.off_wednesday || false,
+        off_thursday: emp.off_thursday || false,
+        off_friday: emp.off_friday || false,
+        off_saturday: emp.off_saturday || false,
+        off_sunday: emp.off_sunday || false,
+        sunday_bonus: emp.sunday_bonus || false,
         current_attendance: emp.current_attendance,
       }))];
       
@@ -1018,55 +1094,81 @@ export default function AttendanceScreen() {
 
   // Initialize attendance entries for employees
   const initializeAttendanceEntries = (employees: Employee[]) => {
-    const newEntries = new Map<string, AttendanceEntry>();
-    
-    employees.forEach((emp) => {
-      let status: 'present' | 'absent' | 'off' | 'unmarked';
+    setAttendanceEntries((prev) => {
+      const newEntries = new Map<string, AttendanceEntry>();
       
-      // Priority 1: Check current_attendance.status first (saved data from backend)
-      if (emp.current_attendance?.status) {
-        const savedStatus = emp.current_attendance.status.toLowerCase();
-        if (savedStatus === 'present' || savedStatus === 'absent' || savedStatus === 'off') {
-          status = savedStatus as 'present' | 'absent' | 'off';
-        } else {
+      employees.forEach((emp) => {
+        const existingEntry = prev.get(emp.employee_id);
+        let status: 'present' | 'absent' | 'off' | 'unmarked';
+        
+        // Priority 1: Check current_attendance.status first (saved data from backend)
+        if (emp.current_attendance?.status) {
+          const savedStatus = emp.current_attendance.status.toLowerCase();
+          if (savedStatus === 'present' || savedStatus === 'absent' || savedStatus === 'off') {
+            status = savedStatus as 'present' | 'absent' | 'off';
+          } else {
+            status = 'unmarked';
+          }
+        }
+        // Priority 2: Use default_status from backend
+        else if (emp.default_status === 'present') {
+          status = 'present';
+        } else if (emp.default_status === 'absent') {
+          status = 'absent';
+        } else if (emp.default_status === 'off') {
+          status = 'off';
+        }
+        // Priority 3: If employee has off day and no existing data, default to 'off'
+        else if (emp.has_off_day) {
+          status = 'off';
+        }
+        // Default: unmarked
+        else {
           status = 'unmarked';
         }
-      }
-      // Priority 2: Use default_status from backend
-      else if (emp.default_status === 'present') {
-        status = 'present';
-      } else if (emp.default_status === 'absent') {
-        status = 'absent';
-      } else if (emp.default_status === 'off') {
-        status = 'off';
-      }
-      // Priority 3: If employee has off day and no existing data, default to 'off'
-      else if (emp.has_off_day) {
-        status = 'off';
-      }
-      // Default: unmarked
-      else {
-        status = 'unmarked';
-      }
-      
-      const entry = createAttendanceEntry(emp, status);
-      
-      // If there's existing attendance data from backend, use the actual values
-      if (emp.current_attendance && status !== 'unmarked') {
-        entry.ot_hours = emp.current_attendance.ot_hours || 0;
-        entry.late_minutes = emp.current_attendance.late_minutes || 0;
-        if (emp.current_attendance.check_in) {
-          entry.clock_in = emp.current_attendance.check_in;
+        
+        const entry = createAttendanceEntry(emp, status);
+        
+        // If there's existing attendance data from backend, use the actual values
+        if (emp.current_attendance && status !== 'unmarked') {
+          entry.ot_hours = emp.current_attendance.ot_hours || 0;
+          entry.late_minutes = emp.current_attendance.late_minutes || 0;
+          if (emp.current_attendance.check_in) {
+            entry.clock_in = emp.current_attendance.check_in;
+          }
+          if (emp.current_attendance.check_out) {
+            entry.clock_out = emp.current_attendance.check_out;
+          }
         }
-        if (emp.current_attendance.check_out) {
-          entry.clock_out = emp.current_attendance.check_out;
+        
+        // Preserve weekly attendance data when available
+        if (existingEntry?.weeklyAttendance) {
+          entry.weeklyAttendance = existingEntry.weeklyAttendance;
         }
-      }
+        if (existingEntry?.autoMarkedReasons) {
+          entry.autoMarkedReasons = existingEntry.autoMarkedReasons;
+        }
+        if (existingEntry?.weekly_penalty_days !== undefined) {
+          entry.weekly_penalty_days = existingEntry.weekly_penalty_days;
+        }
+        if (existingEntry?.employee_off_days) {
+          entry.employee_off_days = existingEntry.employee_off_days;
+          if (selectedDate) {
+            const dayIndex = new Date(selectedDate).getDay();
+            const dayCodeMap = ['Su', 'M', 'Tu', 'W', 'Th', 'F', 'Sa'] as const;
+            const selectedDayCode = dayCodeMap[dayIndex];
+            entry.has_off_day = !!existingEntry.employee_off_days[selectedDayCode];
+          }
+        }
+        if (existingEntry?.sunday_bonus) {
+          entry.sunday_bonus = existingEntry.sunday_bonus;
+        }
+        
+        newEntries.set(emp.employee_id, entry);
+      });
       
-      newEntries.set(emp.employee_id, entry);
+      return newEntries;
     });
-    
-    setAttendanceEntries(newEntries);
   };
 
   // Helper function to create attendance entry
@@ -1107,7 +1209,7 @@ export default function AttendanceScreen() {
       ot_hours: emp.ot_hours || 0,
       late_minutes: emp.late_minutes || 0,
       has_off_day: emp.has_off_day || false,
-      sunday_bonus: false,
+      sunday_bonus: (emp as any).sunday_bonus || false,
       weeklyAttendance: {},
       _shiftStart: emp.shift_start_time || '09:00',
       _shiftEnd: emp.shift_end_time || '18:00'
@@ -1120,15 +1222,247 @@ export default function AttendanceScreen() {
       const entry = prev.get(employeeId);
       if (!entry) return prev;
       
+      let nextValue = value;
+      if (field === 'status') {
+        const employee = eligibleEmployees.find(emp => emp.employee_id === employeeId);
+        const hasOffDay = entry?.has_off_day !== undefined ? entry.has_off_day : (employee?.has_off_day || false);
+        if (hasOffDay && (nextValue === 'absent' || nextValue === 'unmarked')) {
+          nextValue = 'off';
+        }
+      }
+      
       // Only update if value actually changed
-      if (entry[field] === value) return prev;
+      if (entry[field] === nextValue) return prev;
       
       const newMap = new Map(prev);
-      const updated = { ...entry, [field]: value } as AttendanceEntry;
+      const updated = { ...entry, [field]: nextValue } as AttendanceEntry;
+      
+      if (field === 'status') {
+        if (nextValue !== 'present' && nextValue !== 'unmarked') {
+          updated._prevClockIn = entry.clock_in;
+          updated._prevClockOut = entry.clock_out;
+          updated._prevOt = entry.ot_hours;
+          updated._prevLate = entry.late_minutes;
+        }
+        
+        if (nextValue !== 'present') {
+          updated.ot_hours = 0;
+          updated.late_minutes = 0;
+          updated.clock_in = entry._shiftStart || entry.clock_in;
+          updated.clock_out = entry._shiftEnd || entry.clock_out;
+        } else {
+          if (entry._prevClockIn) updated.clock_in = entry._prevClockIn;
+          if (entry._prevClockOut) updated.clock_out = entry._prevClockOut;
+          if (typeof entry._prevOt === 'number') updated.ot_hours = entry._prevOt;
+          if (typeof entry._prevLate === 'number') updated.late_minutes = entry._prevLate;
+        }
+      }
+      
       newMap.set(employeeId, updated);
       return newMap;
     });
-  }, []);
+  }, [eligibleEmployees]);
+
+  const timeToMinutes = (timeStr: string): number => {
+    const [h, m] = timeStr.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return 0;
+    return h * 60 + m;
+  };
+
+  const recalcOtLate = (employeeId: string, clockIn: string, clockOut: string, shiftStart: string, shiftEnd: string) => {
+    const lateArrival = Math.max(timeToMinutes(clockIn) - timeToMinutes(shiftStart), 0);
+    const earlyLeave = Math.max(timeToMinutes(shiftEnd) - timeToMinutes(clockOut), 0);
+    const late_minutes = lateArrival + earlyLeave;
+    const otMinutes = Math.max(timeToMinutes(clockOut) - timeToMinutes(shiftEnd), 0);
+    const otHours = parseFloat((otMinutes / 60).toFixed(1));
+    updateAttendanceEntry(employeeId, 'late_minutes', late_minutes);
+    updateAttendanceEntry(employeeId, 'ot_hours', otHours);
+  };
+
+  const updateClockIn = (emp: Employee, value: string) => {
+    updateAttendanceEntry(emp.employee_id, 'clock_in', value);
+    if (emp.shift_start_time && emp.shift_end_time) {
+      const currentEntry = attendanceEntries.get(emp.employee_id);
+      if (currentEntry) {
+        recalcOtLate(emp.employee_id, value, currentEntry.clock_out, emp.shift_start_time, emp.shift_end_time);
+      }
+    }
+  };
+
+  const updateClockOut = (emp: Employee, value: string) => {
+    updateAttendanceEntry(emp.employee_id, 'clock_out', value);
+    if (emp.shift_start_time && emp.shift_end_time) {
+      const currentEntry = attendanceEntries.get(emp.employee_id);
+      if (currentEntry) {
+        recalcOtLate(emp.employee_id, currentEntry.clock_in, value, emp.shift_start_time, emp.shift_end_time);
+      }
+    }
+  };
+
+  const getFirstOffDay = (employeeOffDays: { [day: string]: boolean } | undefined): string | null => {
+    if (!employeeOffDays) return null;
+    const dayOrder = ['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'];
+    for (const day of dayOrder) {
+      if (employeeOffDays[day] === true) {
+        return day;
+      }
+    }
+    return null;
+  };
+
+  const calculateWeeklyPenaltyDays = (weeklyAttendance: { [day: string]: boolean }): number => {
+    const weekdays = ['M', 'Tu', 'W', 'Th', 'F', 'Sa'];
+    const absentDays = weekdays.filter(day => weeklyAttendance[day] === false).length;
+    if (typeof weeklyAbsentThreshold !== 'number') return 0;
+    const threshold = weeklyAbsentThreshold;
+    if (absentDays >= threshold) {
+      return 1;
+    }
+    return 0;
+  };
+
+  const fetchEmployeeOffDays = useCallback(async (employeeIds: string[]): Promise<Map<string, { [day: string]: boolean }>> => {
+    const offDaysMap = new Map<string, { [day: string]: boolean }>();
+    const missingIds: string[] = [];
+
+    employeeIds.forEach(id => {
+      if (employeeOffDaysCache.has(id)) {
+        offDaysMap.set(id, employeeOffDaysCache.get(id)!);
+      } else {
+        missingIds.push(id);
+      }
+    });
+
+    if (missingIds.length === 0) {
+      return offDaysMap;
+    }
+
+    try {
+      const directoryData = await attendanceService.getEmployeeDirectory(0, 0);
+      const employees = directoryData.results || directoryData.employees || directoryData.data?.results || [];
+
+      employees.forEach((emp: any) => {
+        if (emp.employee_id && missingIds.includes(emp.employee_id)) {
+          const offDays: { [day: string]: boolean } = {
+            M: emp.off_monday || false,
+            Tu: emp.off_tuesday || false,
+            W: emp.off_wednesday || false,
+            Th: emp.off_thursday || false,
+            F: emp.off_friday || false,
+            Sa: emp.off_saturday || false,
+            Su: emp.off_sunday || false,
+          };
+
+          const hasOffDay = Object.values(offDays).some(val => val === true);
+          if (hasOffDay) {
+            offDaysMap.set(emp.employee_id, offDays);
+          } else {
+            offDaysMap.set(emp.employee_id, { M: false, Tu: false, W: false, Th: false, F: false, Sa: false, Su: false });
+          }
+        }
+      });
+
+      setEmployeeOffDaysCache(prev => {
+        const next = new Map(prev);
+        offDaysMap.forEach((value, key) => {
+          next.set(key, value);
+        });
+        return next;
+      });
+    } catch (error) {
+      console.log('Failed to fetch employee off days', error);
+    }
+
+    const mergedMap = new Map(employeeOffDaysCache);
+    offDaysMap.forEach((value, key) => {
+      mergedMap.set(key, value);
+    });
+
+    return mergedMap;
+  }, [employeeOffDaysCache]);
+
+  const fetchWeeklyAttendance = useCallback(async (date: string) => {
+    try {
+      const data = await attendanceService.getWeeklyAttendance(date);
+      const allEmployeeIds = Object.keys(data || {});
+      if (allEmployeeIds.length === 0) return;
+
+      const dayIndex = new Date(date).getDay(); // 0=Sun..6=Sat
+      const dayCodeMap = ['Su', 'M', 'Tu', 'W', 'Th', 'F', 'Sa'] as const;
+      const selectedDayCode = dayCodeMap[dayIndex];
+
+      const employeeOffDaysMap = await fetchEmployeeOffDays(allEmployeeIds);
+      const weeklyPenaltyDaysMap = new Map<string, number>();
+
+      allEmployeeIds.forEach((employeeId) => {
+        const weeklyAttendance = data[employeeId]?.weeklyAttendance || {};
+        const penaltyDays = calculateWeeklyPenaltyDays(weeklyAttendance);
+        if (penaltyDays > 0) {
+          weeklyPenaltyDaysMap.set(employeeId, penaltyDays);
+        }
+      });
+
+      setAttendanceEntries(prev => {
+        const updatedEntries = new Map(prev);
+
+        Object.entries(data).forEach(([employeeId, employeeData]: [string, any]) => {
+          const weeklyAttendance = employeeData.weeklyAttendance || {};
+          const autoMarkedReasons = employeeData.autoMarkedReasons || {};
+          const penaltyIgnoredDays = employeeData.penaltyIgnoredDays || {};
+          const employeeOffDays = employeeOffDaysMap.get(employeeId);
+          const hasOffDay = employeeOffDays ? !!employeeOffDays[selectedDayCode] : false;
+          const penaltyDays = weeklyPenaltyDaysMap.get(employeeId) || 0;
+
+          let updatedWeeklyAttendance = { ...weeklyAttendance };
+          let updatedAutoMarkedReasons = { ...autoMarkedReasons };
+
+          if (penaltyDays > 0 && employeeOffDays) {
+            const firstOffDay = getFirstOffDay(employeeOffDays);
+            if (firstOffDay) {
+              updatedWeeklyAttendance[firstOffDay] = false;
+              updatedAutoMarkedReasons[firstOffDay] = 'Penalty day - Absent more than threshold';
+            }
+          }
+
+          if (updatedEntries.has(employeeId)) {
+            const existingEntry = updatedEntries.get(employeeId);
+            if (existingEntry) {
+              updatedEntries.set(employeeId, {
+                ...existingEntry,
+                weeklyAttendance: updatedWeeklyAttendance,
+                autoMarkedReasons: updatedAutoMarkedReasons,
+                penaltyIgnoredDays,
+                weekly_penalty_days: penaltyDays,
+                employee_off_days: employeeOffDays,
+                has_off_day: hasOffDay,
+              });
+            }
+          } else {
+            updatedEntries.set(employeeId, {
+              employee_id: employeeId,
+              name: employeeData.name || employeeId,
+              department: '',
+              status: 'unmarked',
+              clock_in: '09:00',
+              clock_out: '18:00',
+              ot_hours: 0,
+              late_minutes: 0,
+              has_off_day: hasOffDay,
+              weeklyAttendance: updatedWeeklyAttendance,
+              autoMarkedReasons: updatedAutoMarkedReasons,
+              penaltyIgnoredDays,
+              weekly_penalty_days: penaltyDays,
+              employee_off_days: employeeOffDays,
+            });
+          }
+        });
+
+        return updatedEntries;
+      });
+    } catch (error) {
+      console.log('Failed to fetch weekly attendance', error);
+    }
+  }, [fetchEmployeeOffDays, calculateWeeklyPenaltyDays]);
 
   // Initialize selected date if not set
   useEffect(() => {
@@ -1137,12 +1471,41 @@ export default function AttendanceScreen() {
     }
   }, [selectedDate, dispatch]);
 
+  // Load weekly absent threshold from salary config
+  useEffect(() => {
+    (async () => {
+      try {
+        const config: any = await api.get(API_ENDPOINTS.salaryConfig);
+        const threshold = config?.weekly_absent_threshold;
+        if (typeof threshold === 'number' && threshold >= 2 && threshold <= 7) {
+          setWeeklyAbsentThreshold(threshold);
+        }
+      } catch (error) {
+        console.log('Failed to load weekly absent threshold', error);
+      }
+    })();
+  }, []);
+
   // Load data on component mount and when date changes
   useEffect(() => {
     if (selectedDate) {
+      setAttendanceEntries(new Map());
+      setEligibleEmployees([]);
+      setDayName('');
+      setHasExcelAttendance(false);
+      setIsHoliday(false);
+      setHolidayInfo(null);
       fetchEligibleEmployees();
     }
   }, [fetchEligibleEmployees, selectedDate]);
+
+  // Fetch weekly attendance after employee data is ready
+  useEffect(() => {
+    if (!selectedDate || eligibleEmployees.length === 0) return;
+    if (lastWeeklyFetchDateRef.current === selectedDate) return;
+    lastWeeklyFetchDateRef.current = selectedDate;
+    fetchWeeklyAttendance(selectedDate);
+  }, [selectedDate, eligibleEmployees.length, fetchWeeklyAttendance]);
 
   // Memoized filtered and sorted employees for better performance
   const sortedEmployees = useMemo(() => {
@@ -1175,6 +1538,7 @@ export default function AttendanceScreen() {
 
   // Mark all present
   const markAllPresent = useCallback(() => {
+    if (!progressiveLoadingComplete) return;
     setAttendanceEntries(prev => {
       const newMap = new Map(prev);
       sortedEmployees.forEach(emp => {
@@ -1186,10 +1550,11 @@ export default function AttendanceScreen() {
       });
       return newMap;
     });
-  }, [sortedEmployees]);
+  }, [progressiveLoadingComplete, sortedEmployees]);
 
   // Mark all absent
   const markAllAbsent = useCallback(() => {
+    if (!progressiveLoadingComplete) return;
     setAttendanceEntries(prev => {
       const newMap = new Map(prev);
       sortedEmployees.forEach(emp => {
@@ -1201,18 +1566,60 @@ export default function AttendanceScreen() {
       });
       return newMap;
     });
-  }, [sortedEmployees]);
+  }, [progressiveLoadingComplete, sortedEmployees]);
 
   // Memoized table row component with custom comparison for better performance
-  const AttendanceTableRow = memo(({ employee, entry, hasOffDay, colors, updateAttendanceEntry, hasExcelAttendance, isHoliday }: {
+  const AttendanceTableRow = memo(({ employee, entry, hasOffDay, colors, updateAttendanceEntry, updateClockIn, updateClockOut, hasExcelAttendance, isHoliday, dayName, weeklyAbsentThreshold, revertedPenaltyChips, onPenaltyDayPress }: {
     employee: Employee;
     entry: AttendanceEntry;
     hasOffDay: boolean;
     colors: any;
     updateAttendanceEntry: (id: string, field: keyof AttendanceEntry, value: any) => void;
+    updateClockIn: (emp: Employee, value: string) => void;
+    updateClockOut: (emp: Employee, value: string) => void;
     hasExcelAttendance: boolean;
     isHoliday: boolean;
+    dayName: string;
+    weeklyAbsentThreshold: number | null;
+    revertedPenaltyChips: Set<string>;
+    onPenaltyDayPress: (payload: { employeeId: string; employeeName: string; weeklyAttendance: { [day: string]: boolean }; penaltyDayCode?: string; initialPenaltyIgnored?: boolean; }) => void;
   }) => {
+    const weeklyData = entry?.weeklyAttendance || {};
+    const autoMarkedReasons = entry?.autoMarkedReasons || {};
+    const employeeOffDays =
+      (entry as any).employee_off_days ||
+      {
+        M: (employee as any).off_monday,
+        Tu: (employee as any).off_tuesday,
+        W: (employee as any).off_wednesday,
+        Th: (employee as any).off_thursday,
+        F: (employee as any).off_friday,
+        Sa: (employee as any).off_saturday,
+        Su: (employee as any).off_sunday,
+      };
+    const firstOffDayCode = ['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'].find((d) => employeeOffDays?.[d] === true);
+    const weekdays = ['M', 'Tu', 'W', 'Th', 'F', 'Sa'];
+    const absentCount = weekdays.filter((day) => weeklyData[day] === false).length;
+    const threshold = typeof weeklyAbsentThreshold === 'number' ? weeklyAbsentThreshold : null;
+    const isThresholdBreached = threshold !== null && absentCount >= threshold;
+    const selectedDayCode = (() => {
+      const dn = dayName.toLowerCase();
+      if (dn === 'monday') return 'M';
+      if (dn === 'tuesday') return 'Tu';
+      if (dn === 'wednesday') return 'W';
+      if (dn === 'thursday') return 'Th';
+      if (dn === 'friday') return 'F';
+      if (dn === 'saturday') return 'Sa';
+      if (dn === 'sunday') return 'Su';
+      return null;
+    })();
+    const firstOffDayValue = firstOffDayCode ? weeklyData[firstOffDayCode] : undefined;
+    const isCurrentDateFirstOffDay = firstOffDayCode && selectedDayCode === firstOffDayCode;
+    const isCurrentDateAutoMarked = isCurrentDateFirstOffDay ? (!!autoMarkedReasons?.[selectedDayCode!] || !!entry.sunday_bonus) : false;
+    const isCurrentDateManuallyPresent = isCurrentDateFirstOffDay && entry.status === 'present' && !isCurrentDateAutoMarked;
+    const isFirstOffDayManuallyPresent = firstOffDayCode && (isCurrentDateManuallyPresent || firstOffDayValue === true);
+    const showPenaltyPresentChip = isThresholdBreached && isFirstOffDayManuallyPresent;
+
     return (
       <View style={[styles.tableRow, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         {/* Employee Details */}
@@ -1239,9 +1646,10 @@ export default function AttendanceScreen() {
             <TextInput
               style={[styles.timeInputSmall, { color: colors.text, borderColor: colors.border }]}
               value={entry.clock_in}
-              onChangeText={(value) => updateAttendanceEntry(employee.employee_id, 'clock_in', value)}
+              onChangeText={(value) => updateClockIn(employee, value)}
               placeholder="09:00"
               placeholderTextColor={colors.textSecondary}
+              editable={!hasExcelAttendance && !isHoliday}
             />
           )}
         </View>
@@ -1254,9 +1662,10 @@ export default function AttendanceScreen() {
             <TextInput
               style={[styles.timeInputSmall, { color: colors.text, borderColor: colors.border }]}
               value={entry.clock_out}
-              onChangeText={(value) => updateAttendanceEntry(employee.employee_id, 'clock_out', value)}
+              onChangeText={(value) => updateClockOut(employee, value)}
               placeholder="18:00"
               placeholderTextColor={colors.textSecondary}
+              editable={!hasExcelAttendance && !isHoliday}
             />
           )}
         </View>
@@ -1278,6 +1687,12 @@ export default function AttendanceScreen() {
             </View>
           ) : (
             <View style={styles.statusDropdown}>
+              {hasOffDay && entry.status === 'present' && !isThresholdBreached && (
+                <Text style={[styles.statusHint, { color: colors.warning }]}>Off Day - Extra Pay</Text>
+              )}
+              {entry.sunday_bonus && entry.status === 'present' && (
+                <Text style={[styles.statusHint, { color: colors.primary }]}>Sunday bonus (auto-marked)</Text>
+              )}
               <Text style={[styles.statusText, { color: entry.status === 'present' ? colors.success : entry.status === 'absent' ? colors.error : colors.textSecondary }]}>
                 {entry.status === 'present' ? 'Present' : entry.status === 'absent' ? 'Absent' : 'Unmarked'}
               </Text>
@@ -1342,6 +1757,127 @@ export default function AttendanceScreen() {
             <Text style={[styles.valueText, { color: colors.text }]}>{entry.late_minutes}</Text>
           )}
         </View>
+
+        {/* Weekly Attendance */}
+        <View style={[styles.tableCell, { width: 210 }]}>
+          <View style={styles.weeklyChipsRow}>
+            {['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'].map((day) => {
+              let dayValue = weeklyData[day];
+              if (selectedDayCode === day) {
+                if (entry.status === 'present') dayValue = true;
+                else if (entry.status === 'absent' || entry.status === 'off') dayValue = false;
+              }
+
+              const isFirstOffDay = firstOffDayCode ? day === firstOffDayCode : false;
+              const isCurrentDay = selectedDayCode === day;
+              const isCurrentDayAutoMarked = isCurrentDay ? (!!autoMarkedReasons?.[day] || !!entry.sunday_bonus) : false;
+              const isCurrentDayManuallyPresent = isCurrentDay && entry.status === 'present' && !isCurrentDayAutoMarked;
+              const isPresent = dayValue === true || (isCurrentDay && isCurrentDayManuallyPresent) || (showPenaltyPresentChip && isFirstOffDay);
+              const isAbsent = dayValue === false && !(isCurrentDay && isCurrentDayManuallyPresent) && !(showPenaltyPresentChip && isFirstOffDay);
+              const autoMarkReason = autoMarkedReasons[day];
+              const isAutoMarked = !!autoMarkReason;
+              const isPenaltyDay = isAbsent && autoMarkReason && autoMarkReason.includes('Penalty day');
+              const isPenaltyPresentChip = showPenaltyPresentChip && isFirstOffDay && isPresent && !isAutoMarked;
+              const hasPenaltyReasonButPresent = isPresent && autoMarkReason && autoMarkReason.includes('Penalty day');
+              const wasReverted = entry?.penaltyIgnoredDays?.[day] || revertedPenaltyChips.has(`${employee.employee_id}-${day}`);
+              const isPenaltyDayClickable = isPenaltyDay;
+
+              let chipBackground = colors.surface;
+              let chipBorder = colors.border;
+              let chipText = colors.textSecondary;
+              let chipTooltip = '';
+              let showInfoIcon = false;
+
+              if (isPresent) {
+                if (isPenaltyPresentChip || hasPenaltyReasonButPresent) {
+                  chipBackground = `${colors.warning}20`;
+                  chipBorder = colors.warning;
+                  chipText = colors.warning;
+                  chipTooltip = 'Penalty day is marked as present';
+                  showInfoIcon = true;
+                } else if (isAutoMarked) {
+                  chipBackground = `${colors.success}20`;
+                  chipBorder = colors.success;
+                  chipText = colors.success;
+                  chipTooltip = autoMarkReason || 'Auto-marked present';
+                  showInfoIcon = true;
+                } else {
+                  chipBackground = `${colors.success}20`;
+                  chipBorder = colors.success;
+                  chipText = colors.success;
+                }
+              } else if (isAbsent) {
+                if (isPenaltyDay) {
+                  if (wasReverted) {
+                    chipBackground = '#C4B5FD';
+                    chipBorder = '#7C3AED';
+                    chipText = '#4C1D95';
+                    chipTooltip = 'Penalty reverted for this day';
+                    showInfoIcon = true;
+                  } else {
+                    chipBackground = `${colors.error}20`;
+                    chipBorder = colors.error;
+                    chipText = colors.error;
+                    chipTooltip = autoMarkReason || 'Penalty day - Absent more than threshold';
+                    showInfoIcon = true;
+                  }
+                } else {
+                  chipBackground = `${colors.error}20`;
+                  chipBorder = colors.error;
+                  chipText = colors.error;
+                }
+              } else {
+                chipBackground = colors.divider;
+                chipBorder = colors.border;
+                chipText = colors.textSecondary;
+              }
+
+              return (
+                <TouchableOpacity
+                  key={day}
+                  style={[
+                    styles.weeklyChip,
+                    { backgroundColor: chipBackground, borderColor: chipBorder },
+                    isPenaltyDayClickable && styles.weeklyChipClickable,
+                  ]}
+                  onPress={() => {
+                    if (isPenaltyDayClickable) {
+                      onPenaltyDayPress({
+                        employeeId: employee.employee_id,
+                        employeeName: employee.first_name && employee.last_name
+                          ? `${employee.first_name} ${employee.last_name}`
+                          : employee.name || 'Unknown',
+                        weeklyAttendance: weeklyData,
+                        penaltyDayCode: day,
+                        initialPenaltyIgnored: wasReverted,
+                      });
+                    }
+                  }}
+                  disabled={!isPenaltyDayClickable}
+                >
+                  <Text style={[styles.weeklyChipText, { color: chipText }]}>{day}</Text>
+                  {showInfoIcon && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        if (chipTooltip) {
+                          Alert.alert('Attendance Info', chipTooltip);
+                        }
+                      }}
+                      disabled={!chipTooltip}
+                      style={styles.weeklyChipInfo}
+                    >
+                      <FontAwesome
+                        name="info-circle"
+                        size={10}
+                        color={chipText}
+                      />
+                    </TouchableOpacity>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
       </View>
     );
   }, (prevProps, nextProps) => {
@@ -1353,9 +1889,16 @@ export default function AttendanceScreen() {
       prevProps.entry.clock_out === nextProps.entry.clock_out &&
       prevProps.entry.ot_hours === nextProps.entry.ot_hours &&
       prevProps.entry.late_minutes === nextProps.entry.late_minutes &&
+      prevProps.entry.weeklyAttendance === nextProps.entry.weeklyAttendance &&
+      prevProps.entry.autoMarkedReasons === nextProps.entry.autoMarkedReasons &&
+      prevProps.entry.weekly_penalty_days === nextProps.entry.weekly_penalty_days &&
+      prevProps.entry.sunday_bonus === nextProps.entry.sunday_bonus &&
       prevProps.hasOffDay === nextProps.hasOffDay &&
       prevProps.hasExcelAttendance === nextProps.hasExcelAttendance &&
-      prevProps.isHoliday === nextProps.isHoliday
+      prevProps.isHoliday === nextProps.isHoliday &&
+      prevProps.dayName === nextProps.dayName &&
+      prevProps.weeklyAbsentThreshold === nextProps.weeklyAbsentThreshold &&
+      prevProps.revertedPenaltyChips === nextProps.revertedPenaltyChips
     );
   });
 
@@ -1371,50 +1914,88 @@ export default function AttendanceScreen() {
         return;
       }
       
-      // Prepare attendance data for API
-      const attendanceData = Array.from(attendanceEntries.entries()).map(([employeeId, entry]) => ({
-        employee_id: employeeId,
-        date: selectedDate,
-        status: entry.status,
-        clock_in: entry.clock_in,
-        clock_out: entry.clock_out,
-        ot_hours: entry.ot_hours || 0,
-        late_minutes: entry.late_minutes || 0,
-      }));
-      
-      // Filter out unmarked entries
-      const validAttendanceData = attendanceData.filter(entry => entry.status !== 'unmarked');
-      
-      if (validAttendanceData.length === 0) {
-        Alert.alert('Info', 'No attendance data to save');
+      if (hasExcelAttendance) {
+        Alert.alert('Info', 'Attendance interface is disabled: Excel data uploaded for this month');
         setSaving(false);
         return;
       }
       
-      // Save attendance to backend with error handling
-      try {
-        await attendanceService.saveAttendance(selectedDate, validAttendanceData);
-        Alert.alert('Success', 'Attendance saved successfully!');
-        setError(null);
-      } catch (saveErr: any) {
-        console.log('Save attendance endpoint not available, using bulk update');
-        // Fallback to bulk update endpoint
-        await attendanceService.bulkUpdateAttendance(validAttendanceData);
-        Alert.alert('Success', 'Attendance saved successfully!');
-        setError(null);
+      if (isHoliday && holidayInfo) {
+        const message = `Cannot mark attendance on holiday: ${holidayInfo.name}${holidayInfo.description ? ` - ${holidayInfo.description}` : ''}`;
+        Alert.alert('Info', message);
+        setSaving(false);
+        return;
       }
       
-      // Refresh data after saving
-      await fetchEligibleEmployees();
+      const unmarkedEntries = Array.from(attendanceEntries.values()).filter(entry => {
+        const emp = eligibleEmployees.find(e => e.employee_id === entry.employee_id);
+        const isOffDay = entry.has_off_day || emp?.has_off_day;
+        if (isOffDay) return false;
+        return entry.status === 'unmarked';
+      });
       
+      if (unmarkedEntries.length > 0) {
+        setSaving(false);
+        const unmarkedNames = unmarkedEntries.map(entry => entry.name).join(', ');
+        Alert.alert('Info', `Please mark attendance for: ${unmarkedNames}`);
+        return;
+      }
+      
+      const attendanceData = Array.from(attendanceEntries.values()).map(entry => ({
+        employee_id: entry.employee_id,
+        name: entry.name,
+        department: entry.department,
+        date: selectedDate,
+        status: entry.status,
+        present_days: entry.status === 'present' ? 1 : 0,
+        absent_days: entry.status === 'absent' ? 1 : 0,
+        ot_hours: entry.ot_hours,
+        late_minutes: entry.late_minutes,
+        calendar_days: 1,
+        total_working_days: 1,
+      }));
+      
+      const employeeIds = attendanceData.map(entry => entry.employee_id);
+      const attendanceResult = await attendanceService.saveAttendance(selectedDate, attendanceData);
+      
+      Alert.alert('Success', attendanceResult?.message || 'Attendance saved successfully!');
+      setError(null);
+      
+      setTimeout(() => {
+        if (selectedDate) {
+          fetchWeeklyAttendance(selectedDate);
+        }
+      }, 2000);
+      
+      attendanceService.updateMonthlySummaries(selectedDate, employeeIds).catch(() => {
+        console.log('Monthly summary update failed');
+      });
+      
+      await fetchEligibleEmployees();
     } catch (err: any) {
       console.error('Error saving attendance:', err);
-      setError(err.message || 'Failed to save attendance');
-      Alert.alert('Error', err.message || 'Failed to save attendance');
+      const message = err.message || 'Failed to save attendance';
+      if (message.toLowerCase().includes('holiday')) {
+        setIsHoliday(true);
+      }
+      setError(message);
+      Alert.alert('Error', message);
     } finally {
       setSaving(false);
     }
+    
+    if (selectedDate) {
+      const date = new Date(selectedDate);
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const year = date.getFullYear();
+      fetchAttendanceDates(month, year);
+    }
   };
+
+  const handlePenaltyDayPress = useCallback((payload: { employeeId: string; employeeName: string; weeklyAttendance: { [day: string]: boolean }; penaltyDayCode?: string; initialPenaltyIgnored?: boolean; }) => {
+    setSelectedPenaltyEmployee(payload);
+    setPenaltyModalOpen(true);
+  }, []);
   
   return (
     <GestureHandlerRootView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -1502,6 +2083,11 @@ export default function AttendanceScreen() {
                   handleDateSelect(day.dateString);
                   console.log('Selected date:', day.dateString);
                   console.log('Attendance dates:', attendanceDates);
+                }}
+                onMonthChange={(month) => {
+                  const monthValue = String(month.month).padStart(2, '0');
+                  setCalendarMonth({ month: monthValue, year: month.year });
+                  fetchAttendanceDates(monthValue, month.year);
                 }}
                 markedDates={{
                   ...attendanceDates.reduce((acc, date) => ({
@@ -1603,17 +2189,17 @@ export default function AttendanceScreen() {
             <Text style={[styles.sectionLabel, { color: colors.text }]}>Bulk Actions</Text>
             <View style={styles.bulkButtons}>
               <TouchableOpacity
-                style={[styles.bulkButton, { backgroundColor: colors.success }]}
+                style={[styles.bulkButton, { backgroundColor: colors.success, opacity: (hasExcelAttendance || isHoliday || !progressiveLoadingComplete) ? 0.5 : 1 }]}
                 onPress={markAllPresent}
-                disabled={hasExcelAttendance || isHoliday}
+                disabled={hasExcelAttendance || isHoliday || !progressiveLoadingComplete}
               >
                 <FontAwesome name="check-circle" size={16} color="white" />
                 <Text style={styles.bulkButtonText}>Mark All Present</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.bulkButton, { backgroundColor: colors.error }]}
+                style={[styles.bulkButton, { backgroundColor: colors.error, opacity: (hasExcelAttendance || isHoliday || !progressiveLoadingComplete) ? 0.5 : 1 }]}
                 onPress={markAllAbsent}
-                disabled={hasExcelAttendance || isHoliday}
+                disabled={hasExcelAttendance || isHoliday || !progressiveLoadingComplete}
               >
                 <FontAwesome name="times-circle" size={16} color="white" />
                 <Text style={styles.bulkButtonText}>Mark All Absent</Text>
@@ -1647,6 +2233,20 @@ export default function AttendanceScreen() {
               <FontAwesome name="exclamation-circle" size={16} color={colors.error} />
               <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
             </View>
+          ) : hasExcelAttendance ? (
+            <View style={[styles.disabledBox, { backgroundColor: colors.divider, borderColor: colors.border }]}>
+              <Text style={[styles.disabledTitle, { color: colors.text }]}>Attendance interface is disabled for this month</Text>
+              <Text style={[styles.disabledTextBody, { color: colors.textSecondary }]}>
+                Attendance data has been uploaded via Excel for {new Date(selectedDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </Text>
+            </View>
+          ) : isHoliday ? (
+            <View style={[styles.disabledBox, { backgroundColor: colors.divider, borderColor: colors.border }]}>
+              <Text style={[styles.disabledTitle, { color: colors.text }]}>Attendance interface is disabled for this holiday</Text>
+              <Text style={[styles.disabledTextBody, { color: colors.textSecondary }]}>
+                Cannot mark attendance on {holidayInfo?.name || 'holidays'}
+              </Text>
+            </View>
           ) : sortedEmployees.length === 0 ? (
             <View style={styles.emptyContainer}>
               <FontAwesome name="users" size={48} color={colors.textSecondary} />
@@ -1668,14 +2268,10 @@ export default function AttendanceScreen() {
                     <Text style={[styles.headerCell, { width: 100, color: 'white' }]}>Status</Text>
                     <Text style={[styles.headerCell, { width: 70, color: 'white' }]}>OT Hours</Text>
                     <Text style={[styles.headerCell, { width: 80, color: 'white' }]}>Late Min</Text>
+                    <Text style={[styles.headerCell, { width: 210, color: 'white' }]}>Weekly</Text>
                   </View>
                 )}
                 stickyHeaderIndices={[0]}
-                getItemLayout={(data, index) => ({
-                  length: 60,
-                  offset: 60 * index,
-                  index,
-                })}
                 removeClippedSubviews={true}
                 maxToRenderPerBatch={20}
                 updateCellsBatchingPeriod={100}
@@ -1714,8 +2310,14 @@ export default function AttendanceScreen() {
                     hasOffDay={hasOffDay}
                     colors={colors}
                     updateAttendanceEntry={updateAttendanceEntry}
+                    updateClockIn={updateClockIn}
+                    updateClockOut={updateClockOut}
                     hasExcelAttendance={hasExcelAttendance}
                     isHoliday={isHoliday}
+                    dayName={dayName}
+                    weeklyAbsentThreshold={weeklyAbsentThreshold}
+                    revertedPenaltyChips={revertedPenaltyChips}
+                    onPenaltyDayPress={handlePenaltyDayPress}
                   />
                 );
               }}
@@ -1737,6 +2339,53 @@ export default function AttendanceScreen() {
           colors={colors}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
+        />
+      )}
+
+      {selectedPenaltyEmployee && (
+        <PenaltyRevertModal
+          isOpen={penaltyModalOpen}
+          onClose={() => {
+            setPenaltyModalOpen(false);
+            setSelectedPenaltyEmployee(null);
+          }}
+          employeeId={selectedPenaltyEmployee.employeeId}
+          employeeName={selectedPenaltyEmployee.employeeName}
+          date={selectedDate}
+          weeklyAbsentThreshold={weeklyAbsentThreshold}
+          weeklyAttendance={selectedPenaltyEmployee.weeklyAttendance}
+          initialPenaltyIgnored={selectedPenaltyEmployee.initialPenaltyIgnored}
+          onSuccess={(newIgnored?: boolean) => {
+            if (selectedPenaltyEmployee?.penaltyDayCode) {
+              const key = `${selectedPenaltyEmployee.employeeId}-${selectedPenaltyEmployee.penaltyDayCode}`;
+              setRevertedPenaltyChips(prev => {
+                const next = new Set(prev);
+                if (newIgnored) {
+                  next.add(key);
+                } else {
+                  next.delete(key);
+                }
+                return next;
+              });
+              setAttendanceEntries((prev) => {
+                const next = new Map(prev);
+                const entry = next.get(selectedPenaltyEmployee.employeeId);
+                if (entry) {
+                  const penaltyIgnoredDays = { ...(entry.penaltyIgnoredDays || {}) };
+                  penaltyIgnoredDays[selectedPenaltyEmployee.penaltyDayCode!] = !!newIgnored;
+                  next.set(selectedPenaltyEmployee.employeeId, {
+                    ...entry,
+                    penaltyIgnoredDays,
+                  });
+                }
+                return next;
+              });
+            }
+            fetchEligibleEmployees();
+            if (selectedDate) {
+              fetchWeeklyAttendance(selectedDate);
+            }
+          }}
         />
       )}
     </GestureHandlerRootView>
@@ -1901,6 +2550,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     flex: 1,
+  },
+  disabledBox: {
+    marginHorizontal: 16,
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  disabledTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  disabledTextBody: {
+    marginTop: 6,
+    fontSize: 12,
+    textAlign: 'center',
   },
   emptyContainer: {
     alignItems: 'center',
@@ -2101,7 +2767,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 8,
     borderBottomWidth: 1,
-    minHeight: 60,
+    minHeight: 80,
   },
   tableCell: {
     paddingHorizontal: 8,
@@ -2129,6 +2795,11 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     fontWeight: '500',
+    marginBottom: 4,
+  },
+  statusHint: {
+    fontSize: 10,
+    fontWeight: '600',
     marginBottom: 4,
   },
   statusButtonsSmall: {
@@ -2171,6 +2842,30 @@ const styles = StyleSheet.create({
   },
   offDayContainer: {
     alignItems: 'flex-start',
+  },
+  weeklyChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  weeklyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginRight: 4,
+    marginBottom: 4,
+  },
+  weeklyChipClickable: {
+    opacity: 0.9,
+  },
+  weeklyChipText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  weeklyChipInfo: {
+    marginLeft: 4,
   },
   // Tab styles
   tabsContainer: {
