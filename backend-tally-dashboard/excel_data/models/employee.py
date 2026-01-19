@@ -67,6 +67,11 @@ class EmployeeProfile(TenantAwareModel):
     # Date when the employee was marked inactive
     inactive_marked_at = models.DateField(blank=True, null=True)
     ot_charge_per_hour = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+
+    # Face registration (Azure Face API)
+    face_person_id = models.CharField(max_length=64, blank=True, null=True)
+    face_persisted_face_id = models.CharField(max_length=64, blank=True, null=True)
+    face_registered_at = models.DateTimeField(blank=True, null=True)
     
     # Weekly rules - employee-specific override
     # Only applicable if tenant weekly_absent_penalty_enabled is True

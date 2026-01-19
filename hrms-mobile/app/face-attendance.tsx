@@ -6,17 +6,44 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Switch,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { api } from '@/services/api';
-import { API_ENDPOINTS } from '@/constants/Config';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
-import { ListItemSkeleton, FormSkeleton } from '@/components/LoadingSkeleton';
+import Dropdown from '@/components/Dropdown';
+import { employeeService } from '@/services/employeeService';
+import { azureFaceService } from '@/services/azureFaceService';
+import * as ImagePicker from 'expo-image-picker';
+import { EmployeeProfile } from '@/types';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useFaceDetection } from '@infinitered/react-native-mlkit-face-detection';
+
+const RecognitionCamera = React.memo(
+  ({
+    cameraRef,
+    active,
+    borderColor,
+  }: {
+    cameraRef: React.RefObject<CameraView>;
+    active: boolean;
+    borderColor: string;
+  }) => (
+    <View style={[styles.cameraContainer, { borderColor }]}>
+      <CameraView
+        ref={cameraRef}
+        style={styles.cameraPreview}
+        facing="front"
+        active={active}
+        animateShutter={false}
+      />
+    </View>
+  ),
+  (prev, next) => prev.active === next.active && prev.borderColor === next.borderColor
+);
 
 export default function FaceAttendanceScreen() {
   const router = useRouter();
@@ -25,86 +52,322 @@ export default function FaceAttendanceScreen() {
 
   // Sub-tab state
   const [activeSubTab, setActiveSubTab] = useState<'check-log' | 'registration' | 'recognition'>('check-log');
+  const [employees, setEmployees] = useState<EmployeeProfile[]>([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [selectedImage, setSelectedImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [registering, setRegistering] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [captureMode, setCaptureMode] = useState<'clock_in' | 'clock_out'>('clock_in');
+  const [sessionActive, setSessionActive] = useState(false);
+  const [captureInProgress, setCaptureInProgress] = useState(false);
+  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [lastRecognition, setLastRecognition] = useState<{
+    timestamp: string;
+    message: string;
+  } | null>(null);
+  const [recognitionLog, setRecognitionLog] = useState<
+    Array<{ id: string; timestamp: string; status: 'success' | 'failed'; message: string }>
+  >([]);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const cameraRef = React.useRef<CameraView | null>(null);
+  const faceDetectedRef = React.useRef(false);
+  const lastFaceSeenAtRef = React.useRef(0);
+  const captureInProgressRef = React.useRef(false);
+  const faceDetector = useFaceDetection();
 
+  useEffect(() => {
+    const loadEmployees = async () => {
+      setEmployeesLoading(true);
+      try {
+        const response = await employeeService.getEmployees(1);
+        const results = Array.isArray(response) ? response : response.results || [];
+        setEmployees(results);
+      } catch (error: any) {
+        Alert.alert('Error', error.message || 'Failed to load employees');
+      } finally {
+        setEmployeesLoading(false);
+      }
+    };
+
+    loadEmployees();
+  }, []);
+
+  const employeeOptions = employees.map((employee) => ({
+    value: employee.id.toString(),
+    label: `${employee.first_name} ${employee.last_name || ''}`.trim() + (employee.employee_id ? ` (${employee.employee_id})` : ''),
+  }));
+
+  const pickFromCamera = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (permission.status !== 'granted') {
+      Alert.alert('Permission Needed', 'Camera access is required to take a face photo.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets?.length) {
+      setSelectedImage(result.assets[0]);
+    }
+  };
+
+  const pickFromGallery = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permission.status !== 'granted') {
+      Alert.alert('Permission Needed', 'Photo library access is required to select a face photo.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets?.length) {
+      setSelectedImage(result.assets[0]);
+    }
+  };
+
+  const handleRegisterFace = async () => {
+    if (!selectedEmployeeId) {
+      Alert.alert('Missing Employee', 'Please select an employee to register.');
+      return;
+    }
+
+    if (!selectedImage) {
+      Alert.alert('Missing Photo', 'Please capture or select a face photo.');
+      return;
+    }
+
+    setRegistering(true);
+    try {
+      const imageName =
+        selectedImage.fileName ||
+        selectedImage.uri.split('/').pop() ||
+        `face-${Date.now()}.jpg`;
+
+      const payload = {
+        uri: selectedImage.uri,
+        type: selectedImage.mimeType || 'image/jpeg',
+        name: imageName,
+      };
+
+      const response = await azureFaceService.registerFace(selectedEmployeeId, payload);
+      Alert.alert('Success', response.message || 'Face registered successfully');
+      setSelectedImage(null);
+    } catch (error: any) {
+      Alert.alert('Registration Failed', error.message || 'Unable to register face');
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const requestCameraAccess = async () => {
+    await requestCameraPermission();
+  };
+
+  const sendForRecognition = async (photoUri: string, source: 'auto' | 'manual') => {
+    try {
+      const fileName = photoUri.split('/').pop() || `face-${Date.now()}.jpg`;
+      const result = await azureFaceService.recognizeFace(captureMode, {
+        uri: photoUri,
+        type: 'image/jpeg',
+        name: fileName,
+      });
+
+      if (result.recognized) {
+        const message = `${result.employee_name} marked ${captureMode.replace('_', ' ')}`;
+        setLastRecognition({
+          timestamp: new Date().toLocaleTimeString(),
+          message,
+        });
+        setToast({ message: 'Face verified and attendance marked.', type: 'success' });
+        setRecognitionLog((prev) => [
+          {
+            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: new Date().toLocaleTimeString(),
+            status: 'success',
+            message,
+          },
+          ...prev,
+        ]);
+        setCooldownUntil(Date.now() + 8000);
+      } else if (source === 'manual') {
+        setLastRecognition({
+          timestamp: new Date().toLocaleTimeString(),
+          message: result.message || 'Face not recognized',
+        });
+        setToast({ message: result.message || 'Face not recognized', type: 'error' });
+        setRecognitionLog((prev) => [
+          {
+            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: new Date().toLocaleTimeString(),
+            status: 'failed',
+            message: result.message || 'Face not recognized',
+          },
+          ...prev,
+        ]);
+      }
+    } catch (error: any) {
+      if (source === 'manual') {
+        setLastRecognition({
+          timestamp: new Date().toLocaleTimeString(),
+          message: error.message || 'Recognition failed',
+        });
+        setToast({ message: error.message || 'Recognition failed', type: 'error' });
+        setRecognitionLog((prev) => [
+          {
+            id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp: new Date().toLocaleTimeString(),
+            status: 'failed',
+            message: error.message || 'Recognition failed',
+          },
+          ...prev,
+        ]);
+      }
+    } finally {
+      // Caller controls captureInProgress for auto/manual flows.
+    }
+  };
+
+  const captureAutoIfFaceAppears = async () => {
+    if (!cameraRef.current || captureInProgressRef.current) return;
+    if (cooldownUntil && Date.now() < cooldownUntil) return;
+    captureInProgressRef.current = true;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.35,
+        skipProcessing: true,
+        shutterSound: false,
+      });
+      const photoUri = photo.uri;
+      const result = await faceDetector.detectFaces(photoUri);
+      const now = Date.now();
+      const hasFace = Boolean(result?.faces?.length);
+      if (hasFace) {
+        lastFaceSeenAtRef.current = now;
+        if (!faceDetectedRef.current) {
+          faceDetectedRef.current = true;
+          setFaceDetected(true);
+          setToast({ message: 'Face captured, sent for verification...', type: 'info' });
+          await sendForRecognition(photoUri, 'auto');
+        }
+      } else if (faceDetectedRef.current && now - lastFaceSeenAtRef.current > 3000) {
+        faceDetectedRef.current = false;
+        setFaceDetected(false);
+      }
+    } finally {
+      captureInProgressRef.current = false;
+    }
+  };
+
+  const handleManualCapture = async () => {
+    if (!cameraRef.current || captureInProgressRef.current) return;
+    captureInProgressRef.current = true;
+    setCaptureInProgress(true);
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        skipProcessing: true,
+        shutterSound: false,
+      });
+      await sendForRecognition(photo.uri, 'manual');
+    } finally {
+      captureInProgressRef.current = false;
+      setCaptureInProgress(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!sessionActive) return;
+    const interval = setInterval(() => {
+      if (!captureInProgressRef.current) {
+        captureAutoIfFaceAppears();
+      }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [sessionActive, captureMode, captureInProgress, cooldownUntil]);
+
+  useEffect(() => {
+    faceDetector.initialize({
+      performanceMode: 'fast',
+      landmarkMode: false,
+      contourMode: false,
+      classificationMode: false,
+      minFaceSize: 0.12,
+      isTrackingEnabled: false,
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
 
 
   const renderFaceCheckLog = () => {
-    // Mock data for demonstration - in real implementation, this would fetch from API
-    const mockCheckLog = [
-      { id: 1, name: 'John Doe', checkIn: '09:15', checkOut: '18:30', status: 'present' },
-      { id: 2, name: 'Jane Smith', checkIn: '09:00', checkOut: '17:45', status: 'present' },
-      { id: 3, name: 'Bob Johnson', checkIn: '09:30', checkOut: null, status: 'present' },
-      { id: 4, name: 'Alice Brown', checkIn: null, checkOut: null, status: 'absent' },
-    ];
-
-    const getStatusColor = (status: string) => {
-      switch (status) {
-        case 'present': return colors.primary;
-        case 'absent': return '#ef4444';
-        default: return colors.textSecondary;
-      }
-    };
-
-    const getStatusText = (status: string) => {
-      switch (status) {
-        case 'present': return 'Present';
-        case 'absent': return 'Absent';
-        default: return 'Unknown';
-      }
-    };
+    const getStatusColor = (status: 'success' | 'failed') =>
+      status === 'success' ? colors.success : colors.error;
 
     return (
       <View>
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Daily Check Log</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Recognition Log</Text>
 
           <Text style={[styles.label, { color: colors.text, marginBottom: 16 }]}>
-            View employee check-in and check-out times for today.
+            Track face recognition attempts from this device.
           </Text>
 
           <View style={[styles.infoBox, { backgroundColor: colors.primary + '15', borderColor: colors.primary + '30' }]}>
             <FontAwesome name="clock-o" size={20} color={colors.primary} style={{ marginBottom: 8 }} />
             <Text style={[styles.infoText, { color: colors.text }]}>
-              📊 Today's Attendance Summary:
+              📊 Recognition Summary:
             </Text>
             <Text style={[styles.infoSubText, { color: colors.textSecondary }]}>
-              • Total Employees: {mockCheckLog.length}{'\n'}
-              • Checked In: {mockCheckLog.filter(item => item.checkIn).length}{'\n'}
-              • Still Working: {mockCheckLog.filter(item => item.checkIn && !item.checkOut).length}
+              • Total Attempts: {recognitionLog.length}{'\n'}
+              • सफल/Success: {recognitionLog.filter(item => item.status === 'success').length}{'\n'}
+              • Failed: {recognitionLog.filter(item => item.status === 'failed').length}
             </Text>
           </View>
 
           <Text style={[styles.sectionTitle, { color: colors.text, fontSize: 16, marginTop: 20, marginBottom: 12 }]}>
-            Today's Check Log
+            Latest Attempts
           </Text>
 
-          {mockCheckLog.map((entry) => (
+          {recognitionLog.length === 0 && (
+            <View style={styles.comingSoonContainer}>
+              <FontAwesome name="info-circle" size={32} color={colors.textSecondary} />
+              <Text style={[styles.comingSoonText, { color: colors.textSecondary }]}>
+                No recognition activity yet.
+              </Text>
+            </View>
+          )}
+
+          {recognitionLog.map((entry) => (
             <View key={entry.id} style={[styles.checkLogItem, { backgroundColor: colors.background, borderColor: colors.border }]}>
               <View style={styles.checkLogHeader}>
-                <Text style={[styles.checkLogName, { color: colors.text }]}>{entry.name}</Text>
+                <Text style={[styles.checkLogName, { color: colors.text }]}>{entry.message}</Text>
                 <View style={[styles.statusBadge, { backgroundColor: getStatusColor(entry.status) + '20' }]}>
                   <Text style={[styles.statusText, { color: getStatusColor(entry.status) }]}>
-                    {getStatusText(entry.status)}
+                    {entry.status === 'success' ? 'Success' : 'Failed'}
                   </Text>
                 </View>
               </View>
 
               <View style={styles.checkLogTimes}>
                 <View style={styles.timeItem}>
-                  <FontAwesome name="sign-in" size={14} color={entry.checkIn ? colors.primary : colors.textSecondary} />
-                  <Text style={[styles.timeText, { color: entry.checkIn ? colors.text : colors.textSecondary }]}>
-                    {entry.checkIn || '--:--'}
+                  <FontAwesome name="clock-o" size={14} color={colors.primary} />
+                  <Text style={[styles.timeText, { color: colors.text }]}>
+                    {entry.timestamp}
                   </Text>
-                  <Text style={[styles.timeLabel, { color: colors.textSecondary }]}>Check In</Text>
-                </View>
-
-                <View style={styles.timeItem}>
-                  <FontAwesome name="sign-out" size={14} color={entry.checkOut ? '#10b981' : colors.textSecondary} />
-                  <Text style={[styles.timeText, { color: entry.checkOut ? colors.text : colors.textSecondary }]}>
-                    {entry.checkOut || '--:--'}
-                  </Text>
-                  <Text style={[styles.timeLabel, { color: colors.textSecondary }]}>Check Out</Text>
+                  <Text style={[styles.timeLabel, { color: colors.textSecondary }]}>Time</Text>
                 </View>
               </View>
             </View>
@@ -112,8 +375,9 @@ export default function FaceAttendanceScreen() {
 
           <TouchableOpacity
             style={[styles.saveButton, { backgroundColor: colors.primary, marginTop: 20 }]}
+            onPress={() => setRecognitionLog([])}
           >
-            <Text style={[styles.saveButtonText, { color: 'white' }]}>Refresh Data</Text>
+            <Text style={[styles.saveButtonText, { color: 'white' }]}>Clear Log</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -144,13 +408,78 @@ export default function FaceAttendanceScreen() {
             </Text>
           </View>
 
-          <View style={styles.comingSoonContainer}>
-            <FontAwesome name="clock-o" size={48} color={colors.textSecondary} />
-            <Text style={[styles.comingSoonTitle, { color: colors.text }]}>Coming Soon</Text>
-            <Text style={[styles.comingSoonText, { color: colors.textSecondary }]}>
-              Face registration functionality will be available in the next update.
-            </Text>
+          <View style={styles.formGroup}>
+            <Text style={[styles.label, { color: colors.text }]}>Select Employee</Text>
+            {employeesLoading ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading employees...</Text>
+              </View>
+            ) : (
+              <Dropdown
+                options={employeeOptions}
+                value={selectedEmployeeId}
+                onChange={setSelectedEmployeeId}
+                placeholder="Choose an employee"
+                searchable
+                colors={colors}
+              />
+            )}
           </View>
+
+          <View style={styles.formGroup}>
+            <Text style={[styles.label, { color: colors.text }]}>Capture Face Photo</Text>
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[styles.actionButton, { backgroundColor: colors.primary }]}
+                onPress={pickFromCamera}
+              >
+                <FontAwesome name="camera" size={16} color="white" />
+                <Text style={styles.actionButtonText}>Take Photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionButton, { backgroundColor: colors.secondary }]}
+                onPress={pickFromGallery}
+              >
+                <FontAwesome name="image" size={16} color="white" />
+                <Text style={styles.actionButtonText}>Choose Photo</Text>
+              </TouchableOpacity>
+            </View>
+
+            {selectedImage ? (
+              <View style={[styles.previewContainer, { borderColor: colors.border }]}>
+                <Image source={{ uri: selectedImage.uri }} style={styles.previewImage} />
+                <Text style={[styles.previewText, { color: colors.textSecondary }]}>
+                  Ready to register this face.
+                </Text>
+              </View>
+            ) : (
+              <View style={[styles.previewPlaceholder, { borderColor: colors.border }]}>
+                <FontAwesome name="user" size={32} color={colors.textSecondary} />
+                <Text style={[styles.previewText, { color: colors.textSecondary }]}>
+                  No face photo selected yet.
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={[
+              styles.saveButton,
+              {
+                backgroundColor: selectedEmployeeId && selectedImage ? colors.primary : colors.border,
+                opacity: registering ? 0.7 : 1,
+              },
+            ]}
+            onPress={handleRegisterFace}
+            disabled={registering || !selectedEmployeeId || !selectedImage}
+          >
+            {registering ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text style={[styles.saveButtonText, { color: 'white' }]}>Register Face</Text>
+            )}
+          </TouchableOpacity>
         </View>
       </View>
     );
@@ -180,13 +509,103 @@ export default function FaceAttendanceScreen() {
             </Text>
           </View>
 
-          <View style={styles.comingSoonContainer}>
-            <FontAwesome name="clock-o" size={48} color={colors.textSecondary} />
-            <Text style={[styles.comingSoonTitle, { color: colors.text }]}>Coming Soon</Text>
-            <Text style={[styles.comingSoonText, { color: colors.textSecondary }]}>
-              Face recognition functionality will be available in the next update.
-            </Text>
-          </View>
+          {!cameraPermission?.granted ? (
+            <View style={styles.permissionContainer}>
+              <FontAwesome name="camera" size={36} color={colors.textSecondary} />
+              <Text style={[styles.permissionText, { color: colors.textSecondary }]}>
+                Camera access is required to run face recognition.
+              </Text>
+              <TouchableOpacity
+                style={[styles.saveButton, { backgroundColor: colors.primary }]}
+                onPress={requestCameraAccess}
+              >
+                <Text style={[styles.saveButtonText, { color: 'white' }]}>Grant Camera Access</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              <View style={styles.modeToggleRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.modeButton,
+                    {
+                      backgroundColor: captureMode === 'clock_in' ? colors.primary : colors.surface,
+                      borderColor: colors.primary,
+                    },
+                  ]}
+                  onPress={() => setCaptureMode('clock_in')}
+                >
+                  <Text
+                    style={[
+                      styles.modeButtonText,
+                      { color: captureMode === 'clock_in' ? 'white' : colors.primary },
+                    ]}
+                  >
+                    Clock In
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modeButton,
+                    {
+                      backgroundColor: captureMode === 'clock_out' ? colors.primary : colors.surface,
+                      borderColor: colors.primary,
+                    },
+                  ]}
+                  onPress={() => setCaptureMode('clock_out')}
+                >
+                  <Text
+                    style={[
+                      styles.modeButtonText,
+                      { color: captureMode === 'clock_out' ? 'white' : colors.primary },
+                    ]}
+                  >
+                    Clock Out
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <RecognitionCamera
+                cameraRef={cameraRef}
+                active={activeSubTab === 'recognition'}
+                borderColor={
+                  sessionActive ? (faceDetected ? colors.success : colors.error) : colors.border
+                }
+              />
+
+              <View style={styles.sessionRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.saveButton,
+                    { backgroundColor: sessionActive ? colors.error : colors.primary },
+                  ]}
+                  onPress={() => setSessionActive((prev) => !prev)}
+                >
+                  <Text style={[styles.saveButtonText, { color: 'white' }]}>
+                    {sessionActive ? 'Stop Auto Capture' : 'Start Auto Capture'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, { borderColor: colors.border }]}
+                  onPress={handleManualCapture}
+                  disabled={captureInProgress}
+                >
+                  <Text style={[styles.secondaryButtonText, { color: colors.text }]}>Capture Now</Text>
+                </TouchableOpacity>
+              </View>
+
+              {lastRecognition && (
+                <View style={[styles.recognitionStatus, { borderColor: colors.border }]}>
+                  <Text style={[styles.recognitionTime, { color: colors.textSecondary }]}>
+                    {lastRecognition.timestamp}
+                  </Text>
+                  <Text style={[styles.recognitionMessage, { color: colors.text }]}>
+                    {lastRecognition.message}
+                  </Text>
+                </View>
+              )}
+            </>
+          )}
         </View>
       </View>
     );
@@ -194,6 +613,16 @@ export default function FaceAttendanceScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {toast && (
+        <View
+          style={[
+            styles.toast,
+            { backgroundColor: toast.type === 'success' ? colors.success : toast.type === 'error' ? colors.error : colors.text }
+          ]}
+        >
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      )}
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.primary }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
@@ -315,6 +744,17 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginBottom: 8,
   },
+  formGroup: {
+    marginBottom: 16,
+  },
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  loadingText: {
+    fontSize: 13,
+  },
   switchGroup: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -348,6 +788,127 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  previewContainer: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    gap: 8,
+  },
+  previewImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 12,
+  },
+  previewPlaceholder: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    gap: 8,
+  },
+  previewText: {
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  permissionContainer: {
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 24,
+  },
+  permissionText: {
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  modeToggleRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  modeButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  cameraContainer: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  cameraPreview: {
+    width: '100%',
+    height: 280,
+  },
+  sessionRow: {
+    gap: 12,
+  },
+  secondaryButton: {
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+  },
+  secondaryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  recognitionStatus: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 16,
+  },
+  recognitionTime: {
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  recognitionMessage: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  toast: {
+    position: 'absolute',
+    top: 60,
+    right: 16,
+    left: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    zIndex: 10,
+  },
+  toastText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   checkLogItem: {
     borderWidth: 1,

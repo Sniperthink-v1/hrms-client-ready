@@ -6,7 +6,8 @@ from ..views import (
     update_monthly_summaries_parallel, get_eligible_employees_for_date,
     CleanupTokensView, get_salary_config, update_salary_config,
     recalculate_penalty_bonus_days, RevertPenaltyDayView,
-    get_face_attendance_config, update_face_attendance_config
+    get_face_attendance_config, update_face_attendance_config,
+    register_face, recognize_face,
 )
 
 urlpatterns = [
@@ -25,4 +26,6 @@ urlpatterns = [
     path('eligible-employees/', get_eligible_employees_for_date, name='eligible-employees'),
     path('face-attendance-config/', get_face_attendance_config, name='face-attendance-config'),
     path('face-attendance-config/update/', update_face_attendance_config, name='face-attendance-config-update'),
+    path('face-registration/', register_face, name='face-registration'),
+    path('face-recognition/', recognize_face, name='face-recognition'),
 ]

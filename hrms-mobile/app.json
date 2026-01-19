@@ -15,7 +15,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sniperthink.hrms"
+      "bundleIdentifier": "com.sniperthink.hrms",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow access to capture employee face photos for attendance registration.",
+        "NSPhotoLibraryUsageDescription": "Allow access to select employee face photos for attendance registration."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -26,6 +30,11 @@
       "predictiveBackGestureEnabled": false,
       "usesCleartextTraffic": true,
       "networkSecurityConfig": "./network_security_config.xml",
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_EXTERNAL_STORAGE"
+      ],
       "package": "com.sniperthink.hrms"
     },
     "updates": {

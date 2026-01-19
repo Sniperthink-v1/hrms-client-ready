@@ -191,6 +191,11 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
 }
 
+# Azure Face API
+AZURE_FACE_ENDPOINT = config('AZURE_FACE_ENDPOINT', default='')
+AZURE_FACE_KEY = config('AZURE_FACE_KEY', default='')
+AZURE_FACE_CONFIDENCE_THRESHOLD = config('AZURE_FACE_CONFIDENCE_THRESHOLD', default=0.6, cast=float)
+
 # Background task processing (Celery is not used - using thread-based fallback)
 CELERY_ENABLED = False
 

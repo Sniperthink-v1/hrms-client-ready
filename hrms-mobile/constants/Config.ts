@@ -90,6 +90,8 @@ export const API_ENDPOINTS = {
   // Face Attendance Configuration
   faceAttendanceConfig: '/api/face-attendance-config/',
   faceAttendanceConfigUpdate: '/api/face-attendance-config/update/',
+  faceRegistration: '/api/face-registration/',
+  faceRecognition: '/api/face-recognition/',
   
   // Support
   supportTickets: '/api/support/tickets/',
@@ -113,4 +115,3 @@ export const STORAGE_KEYS = {
 
 // JWT Token Settings
 export const TOKEN_REFRESH_THRESHOLD = 5 * 60 * 1000; // Refresh 5 minutes before expiry
-
