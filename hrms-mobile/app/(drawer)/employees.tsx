@@ -173,7 +173,7 @@ export default function EmployeesScreen() {
   };
 
   const handleEmployeePress = (employee: EmployeeProfile) => {
-    router.push(`/(drawer)/employee-details/${employee.employee_id}`);
+    router.push(`/(drawer)/employee-details/${employee.id}`);
   };
 
   const handleSave = async () => {

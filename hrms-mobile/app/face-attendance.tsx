@@ -1,26 +1,19 @@
 // Face Attendance Screen - Dedicated screen for face attendance features
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  Image,
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import Dropdown from '@/components/Dropdown';
 import { employeeService } from '@/services/employeeService';
-import { azureFaceService } from '@/services/azureFaceService';
-import * as ImagePicker from 'expo-image-picker';
+import { faceEmbeddingService } from '@/services/faceEmbeddingService';
+import { faceLogService } from '@/services/faceLogService';
 import { EmployeeProfile } from '@/types';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFaceDetection } from '@infinitered/react-native-mlkit-face-detection';
+import { useTensorflowModel } from 'react-native-fast-tflite';
+import { generateFaceEmbedding, FaceFrame } from '@/utils/faceEmbedding';
 
 const RecognitionCamera = React.memo(
   ({
@@ -55,7 +48,6 @@ export default function FaceAttendanceScreen() {
   const [employees, setEmployees] = useState<EmployeeProfile[]>([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
-  const [selectedImage, setSelectedImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [registering, setRegistering] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [captureMode, setCaptureMode] = useState<'clock_in' | 'clock_out'>('clock_in');
@@ -72,10 +64,15 @@ export default function FaceAttendanceScreen() {
   >([]);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const cameraRef = React.useRef<CameraView | null>(null);
+  const registrationCameraRef = React.useRef<CameraView | null>(null);
   const faceDetectedRef = React.useRef(false);
+  const registrationDetectingRef = React.useRef(false);
   const lastFaceSeenAtRef = React.useRef(0);
   const captureInProgressRef = React.useRef(false);
+  const [registrationFaceDetected, setRegistrationFaceDetected] = useState(false);
   const faceDetector = useFaceDetection();
+  const embeddingPlugin = useTensorflowModel(require('../assets/models/mobilefacenet.tflite'));
+  const embeddingModel = embeddingPlugin.state === 'loaded' ? embeddingPlugin.model : undefined;
 
   useEffect(() => {
     const loadEmployees = async () => {
@@ -92,6 +89,27 @@ export default function FaceAttendanceScreen() {
     };
 
     loadEmployees();
+
+    // Load centralized face attendance logs for today (shared across devices)
+    const loadLogs = async () => {
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const response = await faceLogService.getLogs({ date: today, limit: 50 });
+        const mapped = response.results.map((log) => ({
+          id: String(log.id),
+          timestamp: new Date(log.event_time).toLocaleTimeString(),
+          status: log.recognized ? 'success' : 'failed',
+          message:
+            log.message ||
+            `${log.employee_name || 'Unknown'} ${log.mode === 'clock_in' ? 'clocked in' : 'clocked out'}`,
+        }));
+        setRecognitionLog(mapped);
+      } catch (error: any) {
+        console.warn('Failed to load face attendance logs:', error?.message || error);
+      }
+    };
+
+    loadLogs();
   }, []);
 
   const employeeOptions = employees.map((employee) => ({
@@ -99,38 +117,13 @@ export default function FaceAttendanceScreen() {
     label: `${employee.first_name} ${employee.last_name || ''}`.trim() + (employee.employee_id ? ` (${employee.employee_id})` : ''),
   }));
 
-  const pickFromCamera = async () => {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (permission.status !== 'granted') {
-      Alert.alert('Permission Needed', 'Camera access is required to take a face photo.');
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
+  const pickLargestFace = (faces: Array<{ frame: FaceFrame }>) => {
+    if (!faces.length) return null;
+    return faces.reduce((largest, face) => {
+      const currentArea = face.frame.width * face.frame.height;
+      const largestArea = largest.frame.width * largest.frame.height;
+      return currentArea > largestArea ? face : largest;
     });
-
-    if (!result.canceled && result.assets?.length) {
-      setSelectedImage(result.assets[0]);
-    }
-  };
-
-  const pickFromGallery = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (permission.status !== 'granted') {
-      Alert.alert('Permission Needed', 'Photo library access is required to select a face photo.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets?.length) {
-      setSelectedImage(result.assets[0]);
-    }
   };
 
   const handleRegisterFace = async () => {
@@ -139,27 +132,59 @@ export default function FaceAttendanceScreen() {
       return;
     }
 
-    if (!selectedImage) {
-      Alert.alert('Missing Photo', 'Please capture or select a face photo.');
+    if (!embeddingModel) {
+      Alert.alert('Model Loading', 'Face embedding model is still loading. Please wait.');
       return;
     }
 
     setRegistering(true);
     try {
-      const imageName =
-        selectedImage.fileName ||
-        selectedImage.uri.split('/').pop() ||
-        `face-${Date.now()}.jpg`;
+      if (!cameraPermission?.granted) {
+        await requestCameraPermission();
+      }
+      const camera = registrationCameraRef.current;
+      if (!camera) {
+        Alert.alert('Camera Unavailable', 'Camera is not ready. Please try again.');
+        return;
+      }
+      const photo = await camera.takePictureAsync({
+        quality: 0.7,
+        skipProcessing: true,
+        shutterSound: false,
+      });
+      if (!photo?.uri) {
+        Alert.alert('Capture Failed', 'Could not capture a photo. Please try again.');
+        return;
+      }
 
-      const payload = {
-        uri: selectedImage.uri,
-        type: selectedImage.mimeType || 'image/jpeg',
-        name: imageName,
-      };
+      const detection = await faceDetector.detectFaces(photo.uri);
+      const faces = detection?.faces ?? [];
+      if (!faces.length) {
+        Alert.alert('No Face Detected', 'Align your face in the frame until the border turns green.');
+        setRegistrationFaceDetected(false);
+        return;
+      }
 
-      const response = await azureFaceService.registerFace(selectedEmployeeId, payload);
+      const primaryFace = pickLargestFace(faces);
+      if (!primaryFace) {
+        Alert.alert('No Face Detected', 'Align your face in the frame until the border turns green.');
+        setRegistrationFaceDetected(false);
+        return;
+      }
+
+      const embedding = await generateFaceEmbedding({
+        model: embeddingModel,
+        imageUri: photo.uri,
+        faceFrame: primaryFace.frame,
+        imageWidth: photo.width,
+        imageHeight: photo.height,
+      });
+      const response = await faceEmbeddingService.registerEmbedding(
+        selectedEmployeeId,
+        Array.from(embedding)
+      );
       Alert.alert('Success', response.message || 'Face registered successfully');
-      setSelectedImage(null);
+      setRegistrationFaceDetected(false);
     } catch (error: any) {
       Alert.alert('Registration Failed', error.message || 'Unable to register face');
     } finally {
@@ -171,14 +196,12 @@ export default function FaceAttendanceScreen() {
     await requestCameraPermission();
   };
 
-  const sendForRecognition = async (photoUri: string, source: 'auto' | 'manual') => {
+  const sendForRecognition = async (embedding: Float32Array, source: 'auto' | 'manual') => {
     try {
-      const fileName = photoUri.split('/').pop() || `face-${Date.now()}.jpg`;
-      const result = await azureFaceService.recognizeFace(captureMode, {
-        uri: photoUri,
-        type: 'image/jpeg',
-        name: fileName,
-      });
+      const result = await faceEmbeddingService.verifyEmbedding(
+        captureMode,
+        Array.from(embedding)
+      );
 
       if (result.recognized) {
         const message = `${result.employee_name} marked ${captureMode.replace('_', ' ')}`;
@@ -238,6 +261,7 @@ export default function FaceAttendanceScreen() {
   const captureAutoIfFaceAppears = async () => {
     if (!cameraRef.current || captureInProgressRef.current) return;
     if (cooldownUntil && Date.now() < cooldownUntil) return;
+    if (!embeddingModel) return;
     captureInProgressRef.current = true;
     try {
       const photo = await cameraRef.current.takePictureAsync({
@@ -248,14 +272,27 @@ export default function FaceAttendanceScreen() {
       const photoUri = photo.uri;
       const result = await faceDetector.detectFaces(photoUri);
       const now = Date.now();
-      const hasFace = Boolean(result?.faces?.length);
+      const faces = result?.faces ?? [];
+      const hasFace = Boolean(faces.length);
       if (hasFace) {
         lastFaceSeenAtRef.current = now;
         if (!faceDetectedRef.current) {
           faceDetectedRef.current = true;
           setFaceDetected(true);
+          const primaryFace = pickLargestFace(faces);
+          if (!primaryFace) {
+            setToast({ message: 'Face detected but could not crop.', type: 'error' });
+            return;
+          }
+          const embedding = await generateFaceEmbedding({
+            model: embeddingModel,
+            imageUri: photoUri,
+            faceFrame: primaryFace.frame,
+            imageWidth: photo.width,
+            imageHeight: photo.height,
+          });
           setToast({ message: 'Face captured, sent for verification...', type: 'info' });
-          await sendForRecognition(photoUri, 'auto');
+          await sendForRecognition(embedding, 'auto');
         }
       } else if (faceDetectedRef.current && now - lastFaceSeenAtRef.current > 3000) {
         faceDetectedRef.current = false;
@@ -266,8 +303,45 @@ export default function FaceAttendanceScreen() {
     }
   };
 
+  // Lightweight detection loop to show live border feedback on registration camera
+  useEffect(() => {
+    if (activeSubTab !== 'registration' || !cameraPermission?.granted) {
+      setRegistrationFaceDetected(false);
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      if (!registrationCameraRef.current || registrationDetectingRef.current) return;
+      registrationDetectingRef.current = true;
+      try {
+        const photo = await registrationCameraRef.current.takePictureAsync({
+          quality: 0.2,
+          skipProcessing: true,
+          shutterSound: false,
+        });
+        if (!photo?.uri) {
+          setRegistrationFaceDetected(false);
+          return;
+        }
+        const detection = await faceDetector.detectFaces(photo.uri);
+        const faces = detection?.faces ?? [];
+        setRegistrationFaceDetected(Boolean(faces.length));
+      } catch {
+        setRegistrationFaceDetected(false);
+      } finally {
+        registrationDetectingRef.current = false;
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeSubTab, cameraPermission?.granted, faceDetector]);
+
   const handleManualCapture = async () => {
     if (!cameraRef.current || captureInProgressRef.current) return;
+    if (!embeddingModel) {
+      setToast({ message: 'Embedding model is still loading.', type: 'error' });
+      return;
+    }
     captureInProgressRef.current = true;
     setCaptureInProgress(true);
     try {
@@ -276,7 +350,25 @@ export default function FaceAttendanceScreen() {
         skipProcessing: true,
         shutterSound: false,
       });
-      await sendForRecognition(photo.uri, 'manual');
+      const result = await faceDetector.detectFaces(photo.uri);
+      const faces = result?.faces ?? [];
+      if (!faces.length) {
+        setToast({ message: 'No face detected. Please try again.', type: 'error' });
+        return;
+      }
+      const primaryFace = pickLargestFace(faces);
+      if (!primaryFace) {
+        setToast({ message: 'Face detected but could not crop.', type: 'error' });
+        return;
+      }
+      const embedding = await generateFaceEmbedding({
+        model: embeddingModel,
+        imageUri: photo.uri,
+        faceFrame: primaryFace.frame,
+        imageWidth: photo.width,
+        imageHeight: photo.height,
+      });
+      await sendForRecognition(embedding, 'manual');
     } finally {
       captureInProgressRef.current = false;
       setCaptureInProgress(false);
@@ -291,7 +383,7 @@ export default function FaceAttendanceScreen() {
       }
     }, 2500);
     return () => clearInterval(interval);
-  }, [sessionActive, captureMode, captureInProgress, cooldownUntil]);
+  }, [sessionActive, captureMode, captureInProgress, cooldownUntil, embeddingModel]);
 
   useEffect(() => {
     faceDetector.initialize({
@@ -400,11 +492,9 @@ export default function FaceAttendanceScreen() {
               👤 Face Registration Features:
             </Text>
             <Text style={[styles.infoSubText, { color: colors.textSecondary }]}>
-              • Register employee faces for recognition{'\n'}
-              • Multiple face angles for better accuracy{'\n'}
-              • Quality validation during registration{'\n'}
-              • Update existing registrations{'\n'}
-              • Bulk registration capabilities
+              • Register employee faces for recognition (live camera only){'\n'}
+              • Green border appears when a face is detected{'\n'}
+              • No photo uploads allowed to ensure real-time capture
             </Text>
           </View>
 
@@ -427,59 +517,51 @@ export default function FaceAttendanceScreen() {
             )}
           </View>
 
-          <View style={styles.formGroup}>
-            <Text style={[styles.label, { color: colors.text }]}>Capture Face Photo</Text>
-            <View style={styles.actionRow}>
+          {!cameraPermission?.granted ? (
+            <View style={styles.permissionContainer}>
+              <FontAwesome name="camera" size={36} color={colors.textSecondary} />
+              <Text style={[styles.permissionText, { color: colors.textSecondary }]}>
+                Camera access is required to register faces.
+              </Text>
               <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: colors.primary }]}
-                onPress={pickFromCamera}
+                style={[styles.saveButton, { backgroundColor: colors.primary }]}
+                onPress={requestCameraAccess}
               >
-                <FontAwesome name="camera" size={16} color="white" />
-                <Text style={styles.actionButtonText}>Take Photo</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: colors.secondary }]}
-                onPress={pickFromGallery}
-              >
-                <FontAwesome name="image" size={16} color="white" />
-                <Text style={styles.actionButtonText}>Choose Photo</Text>
+                <Text style={[styles.saveButtonText, { color: 'white' }]}>Grant Camera Access</Text>
               </TouchableOpacity>
             </View>
+          ) : (
+            <>
+              <RecognitionCamera
+                cameraRef={registrationCameraRef}
+                active={activeSubTab === 'registration'}
+                borderColor={registrationFaceDetected ? colors.success : colors.border}
+              />
+              <Text style={[styles.label, { color: registrationFaceDetected ? colors.success : colors.textSecondary, marginTop: 12 }]}>
+                {registrationFaceDetected
+                  ? 'Face detected — border is green. Tap Register to save.'
+                  : 'Align your face in the frame. Border turns green when detected.'}
+              </Text>
 
-            {selectedImage ? (
-              <View style={[styles.previewContainer, { borderColor: colors.border }]}>
-                <Image source={{ uri: selectedImage.uri }} style={styles.previewImage} />
-                <Text style={[styles.previewText, { color: colors.textSecondary }]}>
-                  Ready to register this face.
-                </Text>
-              </View>
-            ) : (
-              <View style={[styles.previewPlaceholder, { borderColor: colors.border }]}>
-                <FontAwesome name="user" size={32} color={colors.textSecondary} />
-                <Text style={[styles.previewText, { color: colors.textSecondary }]}>
-                  No face photo selected yet.
-                </Text>
-              </View>
-            )}
-          </View>
-
-          <TouchableOpacity
-            style={[
-              styles.saveButton,
-              {
-                backgroundColor: selectedEmployeeId && selectedImage ? colors.primary : colors.border,
-                opacity: registering ? 0.7 : 1,
-              },
-            ]}
-            onPress={handleRegisterFace}
-            disabled={registering || !selectedEmployeeId || !selectedImage}
-          >
-            {registering ? (
-              <ActivityIndicator color="white" />
-            ) : (
-              <Text style={[styles.saveButtonText, { color: 'white' }]}>Register Face</Text>
-            )}
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.saveButton,
+                  {
+                    backgroundColor: selectedEmployeeId && registrationFaceDetected ? colors.primary : colors.border,
+                    opacity: registering ? 0.7 : 1,
+                  },
+                ]}
+                onPress={handleRegisterFace}
+                disabled={registering || !selectedEmployeeId || !registrationFaceDetected}
+              >
+                {registering ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text style={[styles.saveButtonText, { color: 'white' }]}>Register Face</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
     );
@@ -564,6 +646,17 @@ export default function FaceAttendanceScreen() {
                   </Text>
                 </TouchableOpacity>
               </View>
+
+              {embeddingPlugin.state !== 'loaded' && (
+                <View style={styles.modelStatus}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={[styles.modelStatusText, { color: colors.textSecondary }]}>
+                    {embeddingPlugin.state === 'error'
+                      ? 'Face model failed to load.'
+                      : 'Loading face model...'}
+                  </Text>
+                </View>
+              )}
 
               <RecognitionCamera
                 cameraRef={cameraRef}
@@ -885,6 +978,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     marginTop: 16,
+  },
+  modelStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  modelStatusText: {
+    fontSize: 13,
+    fontWeight: '500',
   },
   recognitionTime: {
     fontSize: 12,

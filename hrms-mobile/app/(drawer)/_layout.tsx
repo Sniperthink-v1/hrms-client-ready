@@ -113,6 +113,14 @@ export default function DrawerLayout() {
             headerShown: true,
           }}
         />
+        <Drawer.Screen
+          name="employee-details"
+          options={{
+            title: 'Employee Details',
+            headerShown: false,
+            drawerItemStyle: { display: 'none' },
+          }}
+        />
       </Drawer>
     </GestureHandlerRootView>
   );

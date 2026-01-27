@@ -11,7 +11,9 @@ const API_ENDPOINTS = {
   userProfile: '/api/user/profile/',
   users: '/api/users/',
   userPermissions: (userId: string) => `/api/users/${userId}/permissions/`,
-  deleteAccount: '/api/user/delete-account/'
+  deleteAccount: '/api/user/delete-account/',
+  tenantTimezones: '/api/tenant/timezones/',
+  tenantTimezoneUpdate: '/api/tenant/timezone/update/',
 };
 
 const HRSettings: React.FC = () => {
@@ -65,6 +67,29 @@ const HRSettings: React.FC = () => {
   const [faceAttendanceConfigError, setFaceAttendanceConfigError] = useState<string | null>(null);
   const [faceAttendanceConfigSuccess, setFaceAttendanceConfigSuccess] = useState<string | null>(null);
 
+  // Tenant timezone settings
+  const [tenantTimezone, setTenantTimezone] = useState<string>('UTC');
+  const [timezoneOptions, setTimezoneOptions] = useState<string[]>([]);
+  const [timezoneLoading, setTimezoneLoading] = useState(false);
+  const [timezoneError, setTimezoneError] = useState<string | null>(null);
+  const [timezoneSuccess, setTimezoneSuccess] = useState<string | null>(null);
+
+  // Face attendance logs (centralized backend logs)
+  const [faceLogsLoading, setFaceLogsLoading] = useState(false);
+  const [faceLogsError, setFaceLogsError] = useState<string | null>(null);
+  const [faceLogs, setFaceLogs] = useState<Array<{
+    id: number;
+    employee_id: string | null;
+    employee_name: string | null;
+    mode: 'clock_in' | 'clock_out';
+    recognized: boolean;
+    confidence?: number;
+    message?: string;
+    source?: string;
+    event_time: string;
+  }>>([]);
+  const [faceLogsDate, setFaceLogsDate] = useState<string>(new Date().toISOString().split('T')[0]);
+
   // Fetch current user info (in case localStorage is stale)
   useEffect(() => {
     setLoading(true);
@@ -96,6 +121,30 @@ const HRSettings: React.FC = () => {
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fetch timezone options + current tenant timezone
+  useEffect(() => {
+    setTimezoneLoading(true);
+    setTimezoneError(null);
+    apiGet(API_ENDPOINTS.tenantTimezones)
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Failed to fetch timezones');
+        return await res.json();
+      })
+      .then((data) => {
+        const list = Array.isArray(data?.timezones) ? data.timezones : [];
+        setTimezoneOptions(list);
+        const storedTenant = (() => {
+          try { return JSON.parse(localStorage.getItem('tenant') || '{}'); } catch { return {}; }
+        })();
+        setTenantTimezone(data?.default || storedTenant?.timezone || 'UTC');
+      })
+      .catch((err: any) => {
+        logger.error('Error fetching timezones:', err);
+        setTimezoneError(err.message || 'Failed to load timezones');
+      })
+      .finally(() => setTimezoneLoading(false));
   }, []);
 
   // Fetch all users if current user is superuser
@@ -258,6 +307,35 @@ const HRSettings: React.FC = () => {
         .finally(() => setFaceAttendanceConfigLoading(false));
     }
   }, [isAdmin, isPayrollMaster]);
+
+  const loadFaceLogs = async (dateStr?: string) => {
+    try {
+      setFaceLogsLoading(true);
+      setFaceLogsError(null);
+      const date = dateStr ?? faceLogsDate;
+      const endpoint = date ? `/api/face-attendance/logs/?date=${encodeURIComponent(date)}&limit=50&offset=0` : '/api/face-attendance/logs/?limit=50&offset=0';
+      const res = await apiGet(endpoint);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to fetch face logs');
+      }
+      const data = await res.json();
+      setFaceLogs(Array.isArray(data?.results) ? data.results : []);
+    } catch (err: any) {
+      logger.error('Error fetching face attendance logs:', err);
+      setFaceLogsError(err.message || 'Failed to load face attendance logs');
+    } finally {
+      setFaceLogsLoading(false);
+    }
+  };
+
+  // Load logs when opening Face Attendance tab
+  useEffect(() => {
+    if (activeTab === 'face-attendance' && (isAdmin || isPayrollMaster)) {
+      loadFaceLogs();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, isAdmin, isPayrollMaster]);
   
   // Debug logging
   useEffect(() => {
@@ -332,6 +410,67 @@ const HRSettings: React.FC = () => {
               <div>
                 <label className="block text-gray-700 mb-1">Username</label>
                 <input type="text" value={username} readOnly className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-100" />
+              </div>
+              <div>
+                <label className="block text-gray-700 mb-1">Tenant Timezone</label>
+                {timezoneError && (
+                  <div className="mb-3 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
+                    {timezoneError}
+                  </div>
+                )}
+                {timezoneSuccess && (
+                  <div className="mb-3 p-3 bg-teal-50 border border-teal-200 text-teal-700 rounded">
+                    {timezoneSuccess}
+                  </div>
+                )}
+                <select
+                  value={tenantTimezone}
+                  onChange={(e) => setTenantTimezone(e.target.value)}
+                  disabled={timezoneLoading}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent disabled:bg-gray-100"
+                >
+                  <option value="UTC">UTC</option>
+                  {timezoneOptions.map((tz) => (
+                    <option key={tz} value={tz}>{tz}</option>
+                  ))}
+                </select>
+                <p className="mt-2 text-sm text-gray-500">
+                  This controls how attendance clock-in/out timestamps are stored (independent of server timezone).
+                </p>
+                <button
+                  type="button"
+                  disabled={timezoneLoading}
+                  onClick={async () => {
+                    setTimezoneLoading(true);
+                    setTimezoneError(null);
+                    setTimezoneSuccess(null);
+                    try {
+                      const res = await apiPost(API_ENDPOINTS.tenantTimezoneUpdate, { timezone: tenantTimezone });
+                      if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.error || 'Failed to update timezone');
+                      }
+                      const data = await res.json();
+                      // Update tenant in localStorage for UI consistency
+                      try {
+                        const storedTenant = JSON.parse(localStorage.getItem('tenant') || '{}');
+                        storedTenant.timezone = data.timezone || tenantTimezone;
+                        localStorage.setItem('tenant', JSON.stringify(storedTenant));
+                      } catch {}
+                      setTimezoneSuccess('Timezone updated successfully!');
+                      window.dispatchEvent(new CustomEvent('tenantTimezoneUpdated', { detail: { timezone: data.timezone || tenantTimezone } }));
+                      setTimeout(() => setTimezoneSuccess(null), 2500);
+                    } catch (err: any) {
+                      logger.error('Error updating timezone:', err);
+                      setTimezoneError(err.message || 'Failed to update timezone');
+                    } finally {
+                      setTimezoneLoading(false);
+                    }
+                  }}
+                  className="mt-3 w-full bg-teal-600 text-white px-6 py-3 rounded-lg hover:bg-teal-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  {timezoneLoading ? 'Saving...' : 'Save Timezone'}
+                </button>
               </div>
             </form>
             <div className="flex flex-col gap-4 mt-8">
@@ -761,6 +900,83 @@ const HRSettings: React.FC = () => {
               {faceAttendanceConfigLoading ? 'Saving...' : 'Save Configuration'}
             </button>
           </form>
+
+          {/* Centralized Face Attendance Logs */}
+          <div className="mt-10 border-t pt-8">
+            <h3 className="text-lg font-semibold mb-2">Face Attendance Logs</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Centralized recognition log (shared across mobile and web) for the selected date.
+            </p>
+
+            <div className="flex flex-col md:flex-row gap-3 items-start md:items-end mb-4">
+              <div className="flex-1">
+                <label className="block text-gray-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={faceLogsDate}
+                  onChange={(e) => setFaceLogsDate(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => loadFaceLogs(faceLogsDate)}
+                className="w-full md:w-auto bg-teal-600 text-white px-6 py-3 rounded-lg hover:bg-teal-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                disabled={faceLogsLoading}
+              >
+                {faceLogsLoading ? 'Loading…' : 'Refresh Logs'}
+              </button>
+            </div>
+
+            {faceLogsError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
+                {faceLogsError}
+              </div>
+            )}
+
+            <div className="overflow-x-auto border rounded-lg">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-gray-600 font-medium">Time</th>
+                    <th className="px-4 py-3 text-left text-gray-600 font-medium">Employee</th>
+                    <th className="px-4 py-3 text-left text-gray-600 font-medium">Mode</th>
+                    <th className="px-4 py-3 text-left text-gray-600 font-medium">Confidence</th>
+                    <th className="px-4 py-3 text-left text-gray-600 font-medium">Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {faceLogsLoading && (
+                    <tr>
+                      <td className="px-4 py-3" colSpan={5}>Loading logs…</td>
+                    </tr>
+                  )}
+                  {!faceLogsLoading && faceLogs.length === 0 && (
+                    <tr>
+                      <td className="px-4 py-3 text-gray-500" colSpan={5}>No logs found for this date.</td>
+                    </tr>
+                  )}
+                  {!faceLogsLoading && faceLogs.map((log) => {
+                    const time = new Date(log.event_time).toLocaleTimeString();
+                    const emp = log.employee_name || log.employee_id || 'Unknown';
+                    return (
+                      <tr key={log.id} className="border-t">
+                        <td className="px-4 py-3">{time}</td>
+                        <td className="px-4 py-3">{emp}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex px-2 py-1 rounded text-xs font-medium ${log.mode === 'clock_in' ? 'bg-blue-50 text-blue-700' : 'bg-purple-50 text-purple-700'}`}>
+                            {log.mode === 'clock_in' ? 'Clock In' : 'Clock Out'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">{typeof log.confidence === 'number' ? log.confidence.toFixed(3) : '—'}</td>
+                        <td className="px-4 py-3">{log.message || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 

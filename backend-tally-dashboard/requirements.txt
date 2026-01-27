@@ -39,3 +39,4 @@ sqlparse==0.5.3
 packaging==25.0
 six==1.17.0
 wcwidth==0.2.14
+cryptography==43.0.0

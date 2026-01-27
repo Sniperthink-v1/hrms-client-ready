@@ -6,6 +6,6 @@ const config = getDefaultConfig(__dirname);
 
 // Add support for .cjs and .mjs files (for various npm packages)
 config.resolver.sourceExts.push('cjs', 'mjs');
+config.resolver.assetExts.push('tflite');
 
 module.exports = config;
-

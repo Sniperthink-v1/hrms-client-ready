@@ -14,6 +14,7 @@ import HRAttendanceLog from './components/HRAttendanceLog';
 import HRDailyCheckLog from './components/HRDailyCheckLog';
 import HRLeaveManagement from './components/HRLeaveManagement';
 import HRSettings from './components/HRSettings';
+import HRFaceAttendance from './components/HRFaceAttendance';
 import HREmployeeDetails from './components/HREmployeeDetails';
 import HRDataUpload from './components/HRDataUpload';
 import HRUserInvitation from './components/HRUserInvitation';
@@ -902,9 +903,9 @@ function AppContent({ dark, setDark }: { dark: boolean; setDark: (v: boolean) =>
 
                         {/* Attendance Tracker Route */}
                         <Route path="/hr-management/attendance-tracker" element={<HRAttendanceTracker />} />
-                <Route path="/hr-management/attendance-log" element={<HRAttendanceLog />} />
-                        {/* Face Attendance Route - Shows Daily Check Log */}
-                        <Route path="/hr-management/face-attendance" element={<HRDailyCheckLog />} />
+                        <Route path="/hr-management/attendance-log" element={<HRAttendanceLog />} />
+                        {/* Face Attendance Route - Centralized face log viewer */}
+                        <Route path="/hr-management/face-attendance" element={<HRFaceAttendance />} />
                         {/* Leave Management Route */}
                         <Route path="/hr-management/leave-management" element={<HRLeaveManagement />} />
                         {/* Data Upload Route */}

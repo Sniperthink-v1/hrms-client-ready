@@ -4797,10 +4797,25 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             # ULTRA-FAST: Skip expensive MonthlyAttendanceSummary check
             # Return monthly attendance data directly for maximum performance
             return monthly_attendance_qs
-        
-        # ULTRA-FAST FALLBACK: Return existing monthly attendance records only
-        # Avoid expensive daily aggregation for better performance
-        return monthly_attendance_qs if monthly_attendance_qs.exists() else Attendance.objects.none()
+
+        # Fallback: generate attendance from DailyAttendance when Excel uploads are absent.
+        # Respect requested month/year when provided.
+        if month_param and year_param:
+            try:
+                import calendar
+                from datetime import date
+                year = int(year_param)
+                month = int(month_param)
+                start_date = date(year, month, 1)
+                last_day = calendar.monthrange(year, month)[1]
+                end_date = date(year, month, last_day)
+                return self._generate_attendance_from_daily_range(
+                    tenant, active_employees, start_date, end_date
+                )
+            except (ValueError, TypeError):
+                pass
+
+        return self._generate_monthly_attendance_from_daily(tenant, active_employees)
     
     def _generate_combined_attendance_view(self, tenant, active_employees, month_param=None, year_param=None):
         """
@@ -5567,6 +5582,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         """Check for holidays before creating attendance record"""
         from ..models import Holiday
         from ..utils.utils import get_current_tenant
+        from django.core.cache import cache
         
         # Get the date from the serializer
         date = serializer.validated_data.get('date')
@@ -5619,12 +5635,23 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     })
         
         # No holiday or holiday doesn't apply - proceed with creation
-        serializer.save()
+        instance = serializer.save()
+
+        # Clear attendance caches after manual updates
+        tenant_for_cache = getattr(instance, 'tenant', None) or tenant
+        if tenant_for_cache:
+            try:
+                cache.delete_pattern(f"attendance_all_records_{tenant_for_cache.id}_*")
+            except AttributeError:
+                cache.delete(f"attendance_all_records_{tenant_for_cache.id}")
+            cache.delete(f"attendance_list_{tenant_for_cache.id}_offset_0_limit_50")
+            cache.delete(f"attendance_list_{tenant_for_cache.id}_offset_0_limit_100")
     
     def perform_update(self, serializer):
         """Check for holidays before updating attendance record"""
         from ..models import Holiday
         from ..utils.utils import get_current_tenant
+        from django.core.cache import cache
         
         # Get the date from the serializer (updated date or existing instance date)
         date = serializer.validated_data.get('date')
@@ -5678,7 +5705,17 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     })
         
         # No holiday or holiday doesn't apply - proceed with update
-        serializer.save()
+        instance = serializer.save()
+
+        # Clear attendance caches after manual updates
+        tenant_for_cache = getattr(instance, 'tenant', None) or tenant
+        if tenant_for_cache:
+            try:
+                cache.delete_pattern(f"attendance_all_records_{tenant_for_cache.id}_*")
+            except AttributeError:
+                cache.delete(f"attendance_all_records_{tenant_for_cache.id}")
+            cache.delete(f"attendance_list_{tenant_for_cache.id}_offset_0_limit_50")
+            cache.delete(f"attendance_list_{tenant_for_cache.id}_offset_0_limit_100")
 
     @action(detail=False, methods=['get'])
     def all_records(self, request):

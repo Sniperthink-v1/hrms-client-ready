@@ -52,7 +52,6 @@ export const API_ENDPOINTS = {
   
   // Attendance
   attendance: '/api/attendance/',
-  attendanceStats: '/api/attendance/stats/',
   dailyAttendance: '/api/daily-attendance/',
   employeeAttendance: '/api/excel/daily-attendance/',
   
@@ -90,8 +89,13 @@ export const API_ENDPOINTS = {
   // Face Attendance Configuration
   faceAttendanceConfig: '/api/face-attendance-config/',
   faceAttendanceConfigUpdate: '/api/face-attendance-config/update/',
-  faceRegistration: '/api/face-registration/',
-  faceRecognition: '/api/face-recognition/',
+  faceEmbeddingRegister: '/api/face-embeddings/register/',
+  faceEmbeddingVerify: '/api/face-embeddings/verify/',
+  faceAttendanceLogs: '/api/face-attendance/logs/',
+
+  // Tenant Timezone
+  tenantTimezones: '/api/tenant/timezones/',
+  tenantTimezoneUpdate: '/api/tenant/timezone/update/',
   
   // Support
   supportTickets: '/api/support/tickets/',

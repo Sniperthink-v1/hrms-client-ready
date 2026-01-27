@@ -78,6 +78,11 @@ from .support import (
     SupportTicket,
 )
 
+# Face attendance logs
+from .face_log import (
+    FaceAttendanceLog,
+)
+
 # Define all models to be imported via 'from excel_data.models import *'
 __all__ = [
     # Tenant Models
@@ -130,4 +135,7 @@ __all__ = [
     
     # Support Models
     'SupportTicket',
+    
+    # Face attendance
+    'FaceAttendanceLog',
 ]

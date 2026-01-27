@@ -7,7 +7,7 @@ from ..views import (
     CleanupTokensView, get_salary_config, update_salary_config,
     recalculate_penalty_bonus_days, RevertPenaltyDayView,
     get_face_attendance_config, update_face_attendance_config,
-    register_face, recognize_face,
+    list_timezones, update_tenant_timezone,
 )
 
 urlpatterns = [
@@ -26,6 +26,6 @@ urlpatterns = [
     path('eligible-employees/', get_eligible_employees_for_date, name='eligible-employees'),
     path('face-attendance-config/', get_face_attendance_config, name='face-attendance-config'),
     path('face-attendance-config/update/', update_face_attendance_config, name='face-attendance-config-update'),
-    path('face-registration/', register_face, name='face-registration'),
-    path('face-recognition/', recognize_face, name='face-recognition'),
+    path('tenant/timezones/', list_timezones, name='tenant-timezones'),
+    path('tenant/timezone/update/', update_tenant_timezone, name='tenant-timezone-update'),
 ]

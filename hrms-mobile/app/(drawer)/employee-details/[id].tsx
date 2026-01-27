@@ -22,6 +22,10 @@ import { ListItemSkeleton } from '@/components/LoadingSkeleton';
 import Dropdown from '@/components/Dropdown';
 import { getCountryOptions, getStateOptions, getCityOptions, CountryOption, StateOption, CityOption } from '@/services/locationService';
 
+export const options = {
+  headerShown: false,
+};
+
 interface EmployeeData {
   id?: number;
   employee_id: string;
@@ -144,7 +148,10 @@ export default function EmployeeDetailsScreen() {
       // Load attendance data
       let attendance: any[] = [];
       try {
-        const attendanceResponse = await api.get(`${API_ENDPOINTS.employeeAttendance}?employee_id=${id}&page_size=100`);
+        const employeeIdForAttendance = employee?.employee_id || id;
+        const attendanceResponse = await api.get(
+          `${API_ENDPOINTS.employeeAttendance}?employee_id=${employeeIdForAttendance}&page_size=100`
+        );
         console.log('📊 Attendance response:', attendanceResponse);
 
         // Support paginated responses (data.results) or plain list

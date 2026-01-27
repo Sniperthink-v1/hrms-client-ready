@@ -18,8 +18,8 @@ from rest_framework.decorators import api_view, permission_classes, parser_class
 from ..models import EmployeeProfile
 from django.db.models import Q, Sum, Count
 from django.utils import timezone
-from django.conf import settings
 from rest_framework.permissions import IsAuthenticated, AllowAny
+import pytz
 import logging
 import time
 import calendar
@@ -73,7 +73,6 @@ from ..utils.utils import (
 )
 
 from ..services.salary_service import SalaryCalculationService
-from ..services.azure_face_service import AzureFaceService, AzureFaceServiceError
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -448,6 +447,57 @@ def update_salary_config(request):
         logger.error(f"Error updating salary config: {str(e)}", exc_info=True)
         return Response({'error': f'Failed to update config: {str(e)}'}, status=500)
 
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_timezones(request):
+    """
+    List common timezones for dropdown selection.
+    """
+    return Response({
+        "timezones": pytz.common_timezones,
+        "default": getattr(request, "tenant", None).timezone if getattr(request, "tenant", None) else "UTC",
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_tenant_timezone(request):
+    """
+    Update the tenant timezone (independent of server timezone).
+    Expected payload: { "timezone": "Asia/Kolkata" }
+    """
+    tenant = getattr(request, 'tenant', None)
+    if not tenant:
+        return Response({'error': 'No tenant found'}, status=400)
+
+    tz_name = request.data.get('timezone')
+    if not tz_name:
+        return Response({'error': 'timezone is required'}, status=400)
+
+    if tz_name not in pytz.all_timezones:
+        return Response({'error': 'Invalid timezone'}, status=400)
+
+    tenant.timezone = tz_name
+    tenant.save(update_fields=['timezone'])
+
+    # Clear attendance caches for this tenant
+    try:
+        from django.core.cache import cache
+        cache_keys = [
+            f"attendance_list_{tenant.id}_offset_0_limit_50",
+            f"attendance_list_{tenant.id}_offset_0_limit_100",
+        ]
+        for key in cache_keys:
+            cache.delete(key)
+    except Exception:
+        pass
+
+    return Response({
+        'success': True,
+        'timezone': tz_name,
+    })
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_face_attendance_config(request):
@@ -509,170 +559,6 @@ def update_face_attendance_config(request):
         logger.error(f"Error updating face attendance config: {str(e)}", exc_info=True)
         return Response({'error': f'Failed to update config: {str(e)}'}, status=500)
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-@parser_classes([MultiPartParser, FormParser])
-def register_face(request):
-    """
-    Register an employee face in Azure Face API.
-    Expected payload (multipart/form-data): employee_id, image
-    """
-    try:
-        tenant = getattr(request, 'tenant', None)
-        if not tenant:
-            return Response({'error': 'No tenant found'}, status=400)
-
-        if not tenant.face_attendance_enabled:
-            return Response({'error': 'Face attendance is disabled for this tenant'}, status=403)
-
-        employee_id = request.data.get('employee_id')
-        if not employee_id:
-            return Response({'error': 'employee_id is required'}, status=400)
-
-        image = request.FILES.get('image')
-        if not image:
-            return Response({'error': 'image file is required'}, status=400)
-
-        try:
-            employee = EmployeeProfile.objects.get(tenant=tenant, id=employee_id)
-        except (EmployeeProfile.DoesNotExist, ValueError, TypeError):
-            employee = EmployeeProfile.objects.filter(tenant=tenant, employee_id=employee_id).first()
-            if not employee:
-                return Response({'error': 'Employee not found'}, status=404)
-
-        face_service = AzureFaceService()
-        person_group_id = face_service.get_person_group_id(tenant)
-        face_service.ensure_person_group(person_group_id, tenant.name or f"Tenant {tenant.id}")
-
-        employee_name = f"{employee.first_name} {employee.last_name or ''}".strip()
-        person_id = employee.face_person_id
-        if not person_id:
-            person_id = face_service.create_person(person_group_id, employee_name or employee.employee_id)
-
-        persisted_face_id = face_service.add_face(person_group_id, person_id, image.read())
-        face_service.train_person_group(person_group_id)
-
-        employee.face_person_id = person_id
-        employee.face_persisted_face_id = persisted_face_id
-        employee.face_registered_at = timezone.now()
-        employee.save(update_fields=['face_person_id', 'face_persisted_face_id', 'face_registered_at'])
-
-        return Response({
-            'success': True,
-            'employee_id': employee.id,
-            'employee_name': employee_name or employee.full_name,
-            'person_id': person_id,
-            'persisted_face_id': persisted_face_id,
-            'message': 'Face registered successfully',
-        })
-    except AzureFaceServiceError as exc:
-        logger.error(f"Azure Face API error: {str(exc)}", exc_info=True)
-        return Response({'error': str(exc)}, status=502)
-    except Exception as e:
-        logger.error(f"Error registering face: {str(e)}", exc_info=True)
-        return Response({'error': f'Failed to register face: {str(e)}'}, status=500)
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-@parser_classes([MultiPartParser, FormParser])
-def recognize_face(request):
-    """
-    Recognize a face via Azure Face API and mark attendance.
-    Expected payload (multipart/form-data): mode (clock_in|clock_out), image
-    """
-    try:
-        tenant = getattr(request, 'tenant', None)
-        if not tenant:
-            return Response({'error': 'No tenant found'}, status=400)
-
-        if not tenant.face_attendance_enabled:
-            return Response({'error': 'Face attendance is disabled for this tenant'}, status=403)
-
-        mode = (request.data.get('mode') or '').strip().lower()
-        if mode not in {'clock_in', 'clock_out'}:
-            return Response({'error': 'mode must be clock_in or clock_out'}, status=400)
-
-        image = request.FILES.get('image')
-        if not image:
-            return Response({'error': 'image file is required'}, status=400)
-
-        face_service = AzureFaceService()
-        person_group_id = face_service.get_person_group_id(tenant)
-        face_service.ensure_person_group(person_group_id, tenant.name or f"Tenant {tenant.id}")
-
-        face_ids = face_service.detect_faces(image.read())
-        if not face_ids:
-            return Response({'recognized': False, 'message': 'No face detected'}, status=200)
-        if len(face_ids) > 1:
-            return Response({'recognized': False, 'message': 'Multiple faces detected'}, status=200)
-
-        candidate = face_service.identify_face(
-            person_group_id,
-            face_ids[0],
-            settings.AZURE_FACE_CONFIDENCE_THRESHOLD,
-        )
-        if not candidate:
-            return Response({'recognized': False, 'message': 'Face not recognized'}, status=200)
-
-        person_id = candidate.get('personId')
-        confidence = float(candidate.get('confidence') or 0)
-
-        employee = EmployeeProfile.objects.filter(
-            tenant=tenant,
-            face_person_id=person_id,
-            is_active=True,
-        ).first()
-        if not employee:
-            return Response({'recognized': False, 'message': 'No matching employee found'}, status=200)
-
-        now = timezone.localtime()
-        attendance_date = now.date()
-        attendance_time = now.time().replace(microsecond=0)
-        employee_name = f"{employee.first_name} {employee.last_name or ''}".strip()
-
-        attendance, created = DailyAttendance.objects.get_or_create(
-            tenant=tenant,
-            employee_id=employee.employee_id,
-            date=attendance_date,
-            defaults={
-                'employee_name': employee_name,
-                'department': employee.department or '',
-                'designation': employee.designation or '',
-                'employment_type': employee.employment_type or '',
-                'attendance_status': 'PRESENT',
-                'check_in': attendance_time if mode == 'clock_in' else None,
-                'check_out': attendance_time if mode == 'clock_out' else None,
-            },
-        )
-
-        if not created:
-            attendance.employee_name = employee_name
-            attendance.department = employee.department or ''
-            attendance.designation = employee.designation or ''
-            attendance.employment_type = employee.employment_type or ''
-            attendance.attendance_status = 'PRESENT'
-            if mode == 'clock_in' and not attendance.check_in:
-                attendance.check_in = attendance_time
-            if mode == 'clock_out':
-                if not attendance.check_out or attendance_time > attendance.check_out:
-                    attendance.check_out = attendance_time
-            attendance.save()
-
-        return Response({
-            'recognized': True,
-            'mode': mode,
-            'employee_id': employee.employee_id,
-            'employee_name': employee_name,
-            'confidence': confidence,
-            'timestamp': now.isoformat(),
-            'message': 'Attendance marked successfully',
-        })
-    except AzureFaceServiceError as exc:
-        logger.error(f"Azure Face API error: {str(exc)}", exc_info=True)
-        return Response({'error': str(exc)}, status=502)
-    except Exception as e:
-        logger.error(f"Error recognizing face: {str(e)}", exc_info=True)
-        return Response({'error': f'Failed to recognize face: {str(e)}'}, status=500)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def attendance_status(request):

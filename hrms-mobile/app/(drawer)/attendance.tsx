@@ -929,16 +929,15 @@ export default function AttendanceScreen() {
       
       // Check for Excel attendance and holidays
       try {
-        const [excelResponse, holidayResponse] = await Promise.all([
-          attendanceService.checkExcelAttendance(selectedDate).catch(() => ({ has_excel: false })),
-          attendanceService.checkHoliday(selectedDate).catch(() => ({ is_holiday: false })),
-        ]);
-        
-        setHasExcelAttendance(excelResponse?.has_excel || initialData.has_excel_attendance || false);
+        const holidayResponse = await attendanceService.checkHoliday(selectedDate).catch(() => ({
+          is_holiday: false,
+        }));
+
+        setHasExcelAttendance(initialData.has_excel_attendance || false);
         setIsHoliday(holidayResponse?.is_holiday || false);
         setHolidayInfo(holidayResponse?.holiday_info || null);
       } catch (err) {
-        console.log('Excel/holiday check endpoints not available, using defaults');
+        console.log('Holiday check endpoint not available, using defaults');
         setHasExcelAttendance(initialData.has_excel_attendance || false);
         setIsHoliday(false);
         setHolidayInfo(null);

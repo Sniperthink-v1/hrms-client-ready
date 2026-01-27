@@ -18,7 +18,7 @@ import { useRouter } from 'expo-router';
 import { api } from '@/services/api';
 import { API_ENDPOINTS } from '@/constants/Config';
 import { useAppSelector, useAppDispatch } from '@/store/hooks';
-import { logout } from '@/store/slices/authSlice';
+import { logout, setTenant } from '@/store/slices/authSlice';
 import { authService } from '@/services/authService';
 import { storage } from '@/utils/storage';
 import Colors from '@/constants/Colors';
@@ -70,6 +70,14 @@ export default function SettingsScreen() {
   });
   const [faceAttendanceConfigLoading, setFaceAttendanceConfigLoading] = useState(false);
   const [faceAttendanceConfigSaving, setFaceAttendanceConfigSaving] = useState(false);
+
+  // Tenant timezone (profile tab)
+  const [timezones, setTimezones] = useState<string[]>([]);
+  const [timezoneLoading, setTimezoneLoading] = useState(false);
+  const [timezoneSaving, setTimezoneSaving] = useState(false);
+  const [selectedTimezone, setSelectedTimezone] = useState<string>('UTC');
+  const [showTimezoneModal, setShowTimezoneModal] = useState(false);
+  const [timezoneSearch, setTimezoneSearch] = useState('');
 
 
   // User management tab state (for superusers)
@@ -136,6 +144,25 @@ export default function SettingsScreen() {
         // Log error but fallback to Redux tenant
         console.warn('Failed to fetch tenant credits:', tenantError?.message || tenantError);
         setCurrentTenant(tenant);
+      }
+
+      // Load timezone list + current tenant timezone
+      try {
+        setTimezoneLoading(true);
+        const tzData: any = await api.get(API_ENDPOINTS.tenantTimezones);
+        const tzList = Array.isArray(tzData?.timezones) ? tzData.timezones : [];
+        setTimezones(tzList);
+        const defaultTz =
+          (typeof tzData?.default === 'string' && tzData.default) ||
+          (typeof tenant?.timezone === 'string' && tenant.timezone) ||
+          'UTC';
+        setSelectedTimezone(defaultTz);
+      } catch (tzError: any) {
+        console.warn('Failed to fetch timezones:', tzError?.message || tzError);
+        // fallback to tenant timezone if present
+        if (tenant?.timezone) setSelectedTimezone(tenant.timezone as any);
+      } finally {
+        setTimezoneLoading(false);
       }
       
       // Load PIN status if user has permission
@@ -260,6 +287,23 @@ export default function SettingsScreen() {
         pathname: '/(auth)/login',
         params: { logout: 'true' },
       });
+    }
+  };
+
+  const handleSaveTimezone = async (tz: string) => {
+    try {
+      setTimezoneSaving(true);
+      await api.post(API_ENDPOINTS.tenantTimezoneUpdate, { timezone: tz });
+      setSelectedTimezone(tz);
+      const updatedTenant = { ...(currentTenant || tenant), timezone: tz };
+      setCurrentTenant(updatedTenant);
+      await storage.setTenant(updatedTenant);
+      dispatch(setTenant(updatedTenant));
+      Alert.alert('Success', 'Tenant timezone updated.');
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to update timezone');
+    } finally {
+      setTimezoneSaving(false);
     }
   };
 
@@ -443,7 +487,10 @@ export default function SettingsScreen() {
           pinStatusLoading,
           setShowPINModal,
           themePreference,
-          setThemePreference
+          setThemePreference,
+          selectedTimezone,
+          timezoneLoading,
+          onOpenTimezone: () => setShowTimezoneModal(true),
         })}
         {activeTab === 'salary' && canAccessSalaryTab && renderSalaryTab({
           colors,
@@ -497,6 +544,73 @@ export default function SettingsScreen() {
         handleSetupPIN,
         pinStatus
       })}
+
+      {/* Timezone Modal */}
+      <Modal
+        visible={showTimezoneModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowTimezoneModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Select Timezone</Text>
+              <TouchableOpacity onPress={() => setShowTimezoneModal(false)}>
+                <FontAwesome name="close" size={20} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
+              placeholder="Search timezone (e.g. Asia/Kolkata)"
+              placeholderTextColor={colors.textSecondary}
+              value={timezoneSearch}
+              onChangeText={setTimezoneSearch}
+            />
+
+            <FlatList
+              data={timezones.filter((tz) =>
+                tz.toLowerCase().includes(timezoneSearch.trim().toLowerCase())
+              )}
+              keyExtractor={(item) => item}
+              style={{ marginTop: 12 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.settingRow,
+                    {
+                      borderBottomColor: colors.border,
+                      opacity: timezoneSaving ? 0.6 : 1,
+                    },
+                  ]}
+                  disabled={timezoneSaving}
+                  onPress={async () => {
+                    await handleSaveTimezone(item);
+                    setShowTimezoneModal(false);
+                    setTimezoneSearch('');
+                  }}
+                >
+                  <View style={styles.settingLeft}>
+                    <FontAwesome name="globe" size={18} color={colors.text} />
+                    <Text style={[styles.settingLabel, { color: colors.text, marginLeft: 8 }]}>{item}</Text>
+                  </View>
+                  {selectedTimezone === item ? (
+                    <FontAwesome name="check" size={16} color={colors.primary} />
+                  ) : (
+                    <Text style={[styles.infoLabel, { color: colors.textSecondary }]}> </Text>
+                  )}
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <Text style={[styles.infoLabel, { color: colors.textSecondary, marginTop: 16 }]}>
+                  No timezones found.
+                </Text>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -515,7 +629,10 @@ const renderProfileTab = ({
   pinStatusLoading,
   setShowPINModal,
   themePreference,
-  setThemePreference
+  setThemePreference,
+  selectedTimezone,
+  timezoneLoading,
+  onOpenTimezone,
 }: {
   colors: any;
   tenant: any;
@@ -531,6 +648,9 @@ const renderProfileTab = ({
   setShowPINModal: (value: boolean) => void;
   themePreference: 'system' | 'light' | 'dark';
   setThemePreference: (preference: 'system' | 'light' | 'dark') => Promise<void>;
+  selectedTimezone: string;
+  timezoneLoading: boolean;
+  onOpenTimezone: () => void;
 }) => {
   return (
     <View style={styles.tabContent}>
@@ -540,6 +660,16 @@ const renderProfileTab = ({
         <InfoRow label="Company Name" value={tenant?.name || 'N/A'} colors={colors} />
         <InfoRow label="Subdomain" value={tenant?.subdomain || 'N/A'} colors={colors} />
         <InfoRow label="Credits" value={tenant?.credits != null ? tenant.credits.toString() : 'N/A'} colors={colors} />
+
+        <TouchableOpacity style={styles.settingRow} onPress={onOpenTimezone}>
+          <View style={styles.settingLeft}>
+            <FontAwesome name="clock-o" size={20} color={colors.text} />
+            <Text style={[styles.settingLabel, { color: colors.text }]}>Tenant Timezone</Text>
+          </View>
+          <Text style={[styles.infoValue, { color: colors.textSecondary }]}>
+            {timezoneLoading ? 'Loading…' : (selectedTimezone || 'UTC')}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* User Profile */}
