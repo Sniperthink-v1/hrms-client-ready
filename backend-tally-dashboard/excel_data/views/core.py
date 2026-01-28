@@ -15,6 +15,7 @@ from ..models import EmployeeProfile
 import time
 from django.db.models import Sum, Avg, Count, Q
 from django.db import models
+from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from rest_framework.permissions import IsAuthenticated
 import logging
 from datetime import datetime, time as dt_time
@@ -994,32 +995,38 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         
         logger.info(f"Filtering ChartAggregatedData by {len(period_keys)} period_keys: {sorted(period_keys)[:10]}")
         
-        # Check which period_keys actually exist in database
-        existing_period_keys = set(
-            ChartAggregatedData.objects.filter(tenant=tenant)
-            .values_list('period_key', flat=True)
-            .distinct()
-        )
-        matching_keys = set(period_keys).intersection(existing_period_keys)
-        missing_keys = set(period_keys) - existing_period_keys
-        
-        logger.info(f"Period key verification: {len(matching_keys)} keys exist, {len(missing_keys)} keys missing")
-        if missing_keys:
-            logger.warning(f"Missing period_keys in database: {sorted(list(missing_keys))[:20]}")
-        if matching_keys:
-            logger.info(f"Found period_keys in database: {sorted(list(matching_keys))[:10]}")
-        
-        # Use period_key for exact matching (avoids Cartesian product)
-        # Only filter by keys that actually exist
-        if matching_keys:
-            chart_queryset = ChartAggregatedData.objects.filter(
-                tenant=tenant,
-                period_key__in=list(matching_keys)
+        try:
+            # Check which period_keys actually exist in database
+            existing_period_keys = set(
+                ChartAggregatedData.objects.filter(tenant=tenant)
+                .values_list('period_key', flat=True)
+                .distinct()
             )
-            logger.info(f"ChartAggregatedData queryset: {chart_queryset.count()} records matched")
-        else:
+            matching_keys = set(period_keys).intersection(existing_period_keys)
+            missing_keys = set(period_keys) - existing_period_keys
+            
+            logger.info(f"Period key verification: {len(matching_keys)} keys exist, {len(missing_keys)} keys missing")
+            if missing_keys:
+                logger.warning(f"Missing period_keys in database: {sorted(list(missing_keys))[:20]}")
+            if matching_keys:
+                logger.info(f"Found period_keys in database: {sorted(list(matching_keys))[:10]}")
+            
+            # Use period_key for exact matching (avoids Cartesian product)
+            # Only filter by keys that actually exist
+            if matching_keys:
+                chart_queryset = ChartAggregatedData.objects.filter(
+                    tenant=tenant,
+                    period_key__in=list(matching_keys)
+                )
+                logger.info(f"ChartAggregatedData queryset: {chart_queryset.count()} records matched")
+            else:
+                chart_queryset = ChartAggregatedData.objects.none()
+                logger.warning("No matching period_keys found - queryset will be empty, will fallback to CalculatedSalary")
+        except (DatabaseError, OperationalError, ProgrammingError) as exc:
+            # If the aggregation table isn't migrated or is temporarily unavailable, fall back safely.
+            logger.error("ChartAggregatedData unavailable, falling back to CalculatedSalary: %s", exc)
+            matching_keys = set()
             chart_queryset = ChartAggregatedData.objects.none()
-            logger.warning(f"No matching period_keys found - queryset will be empty, will fallback to CalculatedSalary")
         
         # Apply department filter if specified
         if selected_department and selected_department != 'All':
