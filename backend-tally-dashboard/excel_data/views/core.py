@@ -614,6 +614,41 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         
         # Always use CalculatedSalary data - no fallback to demo data
         tenant = getattr(request, 'tenant', None)
+
+        def _build_today_attendance():
+            try:
+                import pytz
+                tz_name = getattr(tenant, "timezone", "UTC") or "UTC"
+                tz = pytz.timezone(tz_name) if tz_name in pytz.all_timezones else pytz.UTC
+                local_today = timezone.now().astimezone(tz).date()
+
+                qs = DailyAttendance.objects.filter(tenant=tenant, date=local_today)
+                if selected_department and selected_department != 'All':
+                    if selected_department == 'N/A':
+                        qs = qs.filter(
+                            Q(department__isnull=True) |
+                            Q(department__exact='') |
+                            Q(department__iexact='N/A')
+                        )
+                    else:
+                        qs = qs.filter(department=selected_department)
+
+                present_count = qs.filter(attendance_status='PRESENT').count()
+                absent_count = qs.filter(attendance_status='ABSENT').count()
+                late_count = qs.filter(time_status='LATE').count()
+
+                return [
+                    {'status': 'PRESENT', 'count': present_count},
+                    {'status': 'ABSENT', 'count': absent_count},
+                    {'status': 'LATE', 'count': late_count},
+                ]
+            except Exception as exc:
+                logger.warning("Failed to compute today's attendance: %s", exc)
+                return [
+                    {'status': 'PRESENT', 'count': 0},
+                    {'status': 'ABSENT', 'count': 0},
+                    {'status': 'LATE', 'count': 0},
+                ]
         
         # PERFORMANCE: Try cache first (3 minute cache for charts data)
         from django.core.cache import cache
@@ -1718,12 +1753,8 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         
         query_timings['total_trends_ms'] = round((time.time() - trends_start) * 1000, 2)
         
-        # Today's attendance mock data (since we don't have daily tracking)
-        today_attendance = [
-            {'status': 'Present', 'count': int(total_employees * 0.85)},
-            {'status': 'Absent', 'count': int(total_employees * 0.10)},
-            {'status': 'Late', 'count': int(total_employees * 0.05)}
-        ]
+        # Today's attendance (dynamic from DailyAttendance)
+        today_attendance = _build_today_attendance()
         
         # PHASE 1 OPTIMIZATION: Cache expensive department lookup with timing
         dept_lookup_start = time.time()
@@ -2219,12 +2250,8 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         
         query_timings['total_trends_ms'] = round((time.time() - trends_start) * 1000, 2)
         
-        # Today's attendance (mock data)
-        today_attendance = [
-            {'status': 'Present', 'count': int(total_employees * 0.85)},
-            {'status': 'Absent', 'count': int(total_employees * 0.10)},
-            {'status': 'Late', 'count': int(total_employees * 0.05)}
-        ]
+        # Today's attendance (dynamic from DailyAttendance)
+        today_attendance = _build_today_attendance()
         
         # Determine selected period label
         if payroll_periods and len(payroll_periods) > 0:

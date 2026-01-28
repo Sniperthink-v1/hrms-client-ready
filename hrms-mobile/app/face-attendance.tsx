@@ -6,10 +6,9 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import Dropdown from '@/components/Dropdown';
-import { employeeService } from '@/services/employeeService';
+import { employeeService, ActiveEmployeeListItem } from '@/services/employeeService';
 import { faceEmbeddingService } from '@/services/faceEmbeddingService';
 import { faceLogService } from '@/services/faceLogService';
-import { EmployeeProfile } from '@/types';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFaceDetection } from '@infinitered/react-native-mlkit-face-detection';
 import { useTensorflowModel } from 'react-native-fast-tflite';
@@ -45,7 +44,7 @@ export default function FaceAttendanceScreen() {
 
   // Sub-tab state
   const [activeSubTab, setActiveSubTab] = useState<'check-log' | 'registration' | 'recognition'>('check-log');
-  const [employees, setEmployees] = useState<EmployeeProfile[]>([]);
+  const [employees, setEmployees] = useState<ActiveEmployeeListItem[]>([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [registering, setRegistering] = useState(false);
@@ -78,9 +77,8 @@ export default function FaceAttendanceScreen() {
     const loadEmployees = async () => {
       setEmployeesLoading(true);
       try {
-        const response = await employeeService.getEmployees(1);
-        const results = Array.isArray(response) ? response : response.results || [];
-        setEmployees(results);
+        const results = await employeeService.getActiveEmployeesList();
+        setEmployees(Array.isArray(results) ? results : []);
       } catch (error: any) {
         Alert.alert('Error', error.message || 'Failed to load employees');
       } finally {
@@ -114,7 +112,7 @@ export default function FaceAttendanceScreen() {
 
   const employeeOptions = employees.map((employee) => ({
     value: employee.id.toString(),
-    label: `${employee.first_name} ${employee.last_name || ''}`.trim() + (employee.employee_id ? ` (${employee.employee_id})` : ''),
+    label: `${employee.name}`.trim() + (employee.employee_id ? ` (${employee.employee_id})` : ''),
   }));
 
   const pickLargestFace = (faces: Array<{ frame: FaceFrame }>) => {
@@ -161,6 +159,11 @@ export default function FaceAttendanceScreen() {
       const faces = detection?.faces ?? [];
       if (!faces.length) {
         Alert.alert('No Face Detected', 'Align your face in the frame until the border turns green.');
+        setRegistrationFaceDetected(false);
+        return;
+      }
+      if (faces.length > 1) {
+        Alert.alert('Multiple Faces Detected', 'Only one face should be in the frame. Please try again.');
         setRegistrationFaceDetected(false);
         return;
       }
@@ -274,6 +277,10 @@ export default function FaceAttendanceScreen() {
       const now = Date.now();
       const faces = result?.faces ?? [];
       const hasFace = Boolean(faces.length);
+      if (faces.length > 1) {
+        setToast({ message: 'Multiple faces detected. Please allow only one person in frame.', type: 'error' });
+        return;
+      }
       if (hasFace) {
         lastFaceSeenAtRef.current = now;
         if (!faceDetectedRef.current) {
@@ -325,7 +332,7 @@ export default function FaceAttendanceScreen() {
         }
         const detection = await faceDetector.detectFaces(photo.uri);
         const faces = detection?.faces ?? [];
-        setRegistrationFaceDetected(Boolean(faces.length));
+        setRegistrationFaceDetected(faces.length === 1);
       } catch {
         setRegistrationFaceDetected(false);
       } finally {
@@ -354,6 +361,10 @@ export default function FaceAttendanceScreen() {
       const faces = result?.faces ?? [];
       if (!faces.length) {
         setToast({ message: 'No face detected. Please try again.', type: 'error' });
+        return;
+      }
+      if (faces.length > 1) {
+        setToast({ message: 'Multiple faces detected. Please allow only one person in frame.', type: 'error' });
         return;
       }
       const primaryFace = pickLargestFace(faces);

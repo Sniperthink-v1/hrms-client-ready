@@ -18,6 +18,18 @@ from ..utils.face_embedding_crypto import encrypt_embedding, decrypt_embedding
 
 logger = logging.getLogger(__name__)
 
+def _is_off_day(employee: EmployeeProfile, target_date) -> bool:
+    day_of_week = target_date.weekday()
+    return (
+        (day_of_week == 0 and employee.off_monday)
+        or (day_of_week == 1 and employee.off_tuesday)
+        or (day_of_week == 2 and employee.off_wednesday)
+        or (day_of_week == 3 and employee.off_thursday)
+        or (day_of_week == 4 and employee.off_friday)
+        or (day_of_week == 5 and employee.off_saturday)
+        or (day_of_week == 6 and employee.off_sunday)
+    )
+
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
     """
@@ -55,6 +67,8 @@ def _mark_face_attendance(tenant, employee: EmployeeProfile, mode: str) -> None:
     employee_id = employee.employee_id or str(employee.id)
 
     try:
+        if _is_off_day(employee, today):
+            return
         record, created = DailyAttendance.objects.get_or_create(
             tenant=tenant,
             employee_id=employee_id,
@@ -389,6 +403,45 @@ class FaceEmbeddingVerifyView(APIView):
         employee = best_obj.employee
         best_obj.last_used_at = timezone.now()
         best_obj.save(update_fields=["last_used_at"])
+
+        import pytz
+        tz_name = getattr(tenant, "timezone", "UTC") or "UTC"
+        tz = pytz.timezone(tz_name) if tz_name in pytz.all_timezones else pytz.UTC
+        local_today = timezone.now().astimezone(tz).date()
+        if _is_off_day(employee, local_today):
+            try:
+                FaceAttendanceLog.objects.create(
+                    tenant=tenant,
+                    employee=employee,
+                    employee_identifier=employee.employee_id or str(employee.id),
+                    event_type="verification",
+                    mode=mode,
+                    recognized=True,
+                    confidence=float(best_score),
+                    message="Off-day check-in detected. Admin must mark attendance manually.",
+                    source="mobile",
+                    event_time=timezone.now(),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create off-day FaceAttendanceLog for employee %s: %s",
+                    employee.employee_id,
+                    exc,
+                )
+
+            return Response(
+                {
+                    "recognized": True,
+                    "mode": mode,
+                    "employee_id": str(employee.id),
+                    "employee_name": f"{employee.first_name} {employee.last_name}".strip(),
+                    "confidence": float(best_score),
+                    "timestamp": timezone.now().isoformat(),
+                    "message": "Off-day check-in detected. Admin must mark attendance manually.",
+                    "requires_admin": True,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         # Mark daily attendance so it reflects immediately in web + mobile dashboards
         try:

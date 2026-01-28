@@ -3,6 +3,14 @@ import { api } from './api';
 import { API_ENDPOINTS } from '@/constants/Config';
 import { EmployeeProfile, PaginatedResponse } from '@/types';
 
+export interface ActiveEmployeeListItem {
+  id: number;
+  employee_id: string | null;
+  name: string;
+  department?: string;
+  designation?: string;
+}
+
 export interface EmployeeStats {
   total: number;
   active: number;
@@ -22,6 +30,11 @@ export const employeeService = {
     if (department && department !== 'All') params.append('department', department);
     
     return await api.get<PaginatedResponse<EmployeeProfile>>(`${API_ENDPOINTS.employees}?${params.toString()}`);
+  },
+
+  // Get a lightweight list of all active employees (non-paginated)
+  async getActiveEmployeesList(): Promise<ActiveEmployeeListItem[]> {
+    return await api.get<ActiveEmployeeListItem[]>('/api/employees/active_employees_list/');
   },
 
   // Get employee by ID
@@ -98,4 +111,3 @@ export const employeeService = {
 };
 
 export default employeeService;
-
