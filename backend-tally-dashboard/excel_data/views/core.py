@@ -26,6 +26,47 @@ from django.core.cache import cache
 # Initialize logger
 logger = logging.getLogger(__name__)
 
+def _build_today_attendance(tenant, selected_department):
+    try:
+        import pytz
+        if not tenant:
+            return [
+                {'status': 'PRESENT', 'count': 0},
+                {'status': 'ABSENT', 'count': 0},
+                {'status': 'LATE', 'count': 0},
+            ]
+        tz_name = getattr(tenant, "timezone", "UTC") or "UTC"
+        tz = pytz.timezone(tz_name) if tz_name in pytz.all_timezones else pytz.UTC
+        local_today = timezone.now().astimezone(tz).date()
+
+        qs = DailyAttendance.objects.filter(tenant=tenant, date=local_today)
+        if selected_department and selected_department != 'All':
+            if selected_department == 'N/A':
+                qs = qs.filter(
+                    Q(department__isnull=True) |
+                    Q(department__exact='') |
+                    Q(department__iexact='N/A')
+                )
+            else:
+                qs = qs.filter(department=selected_department)
+
+        present_count = qs.filter(attendance_status='PRESENT').count()
+        absent_count = qs.filter(attendance_status='ABSENT').count()
+        late_count = qs.filter(time_status='LATE').count()
+
+        return [
+            {'status': 'PRESENT', 'count': present_count},
+            {'status': 'ABSENT', 'count': absent_count},
+            {'status': 'LATE', 'count': late_count},
+        ]
+    except Exception as exc:
+        logger.warning("Failed to compute today's attendance: %s", exc)
+        return [
+            {'status': 'PRESENT', 'count': 0},
+            {'status': 'ABSENT', 'count': 0},
+            {'status': 'LATE', 'count': 0},
+        ]
+
 from ..models import (
     SalaryData,
     EmployeeProfile,
@@ -616,40 +657,7 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         # Always use CalculatedSalary data - no fallback to demo data
         tenant = getattr(request, 'tenant', None)
 
-        def _build_today_attendance():
-            try:
-                import pytz
-                tz_name = getattr(tenant, "timezone", "UTC") or "UTC"
-                tz = pytz.timezone(tz_name) if tz_name in pytz.all_timezones else pytz.UTC
-                local_today = timezone.now().astimezone(tz).date()
-
-                qs = DailyAttendance.objects.filter(tenant=tenant, date=local_today)
-                if selected_department and selected_department != 'All':
-                    if selected_department == 'N/A':
-                        qs = qs.filter(
-                            Q(department__isnull=True) |
-                            Q(department__exact='') |
-                            Q(department__iexact='N/A')
-                        )
-                    else:
-                        qs = qs.filter(department=selected_department)
-
-                present_count = qs.filter(attendance_status='PRESENT').count()
-                absent_count = qs.filter(attendance_status='ABSENT').count()
-                late_count = qs.filter(time_status='LATE').count()
-
-                return [
-                    {'status': 'PRESENT', 'count': present_count},
-                    {'status': 'ABSENT', 'count': absent_count},
-                    {'status': 'LATE', 'count': late_count},
-                ]
-            except Exception as exc:
-                logger.warning("Failed to compute today's attendance: %s", exc)
-                return [
-                    {'status': 'PRESENT', 'count': 0},
-                    {'status': 'ABSENT', 'count': 0},
-                    {'status': 'LATE', 'count': 0},
-                ]
+        # Helper defined at module level for reuse across chart paths.
         
         # PERFORMANCE: Try cache first (3 minute cache for charts data)
         from django.core.cache import cache
@@ -1761,7 +1769,7 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         query_timings['total_trends_ms'] = round((time.time() - trends_start) * 1000, 2)
         
         # Today's attendance (dynamic from DailyAttendance)
-        today_attendance = _build_today_attendance()
+        today_attendance = _build_today_attendance(tenant, selected_department)
         
         # PHASE 1 OPTIMIZATION: Cache expensive department lookup with timing
         dept_lookup_start = time.time()
@@ -2258,7 +2266,7 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         query_timings['total_trends_ms'] = round((time.time() - trends_start) * 1000, 2)
         
         # Today's attendance (dynamic from DailyAttendance)
-        today_attendance = _build_today_attendance()
+        today_attendance = _build_today_attendance(tenant, selected_department)
         
         # Determine selected period label
         if payroll_periods and len(payroll_periods) > 0:
