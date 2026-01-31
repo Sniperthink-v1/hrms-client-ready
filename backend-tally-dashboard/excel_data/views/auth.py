@@ -119,6 +119,13 @@ class SystemUserLoginView(APIView):
         if not user.check_password(password):
             return Response({"error": "Invalid credentials"}, status=401)
 
+        client_type = request.data.get("client_type")
+        if user.role == "gate_keeper" and client_type != "mobile":
+            return Response(
+                {"error": "Gate Keeper accounts can only login from mobile devices.", "mobile_only": True},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Check if email is verified (only required for admin users, not invited users)
         if not user.email_verified and not user.is_invited:
             return Response(
@@ -1119,6 +1126,13 @@ class PublicTenantLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+        client_type = request.data.get("client_type")
+        if user.role == "gate_keeper" and client_type != "mobile":
+            return Response(
+                {"error": "Gate Keeper accounts can only login from mobile devices.", "mobile_only": True},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Check if user has a tenant assigned (skip for superusers)
         if not user.tenant and not user.is_superuser:
             return Response(
@@ -1708,6 +1722,7 @@ class EnhancedInvitationView(APIView):
 
             try:
 
+                must_change_password = data.get("role") != "gate_keeper"
                 user = CustomUser.objects.create_user(
                     username=email,
                     email=email,
@@ -1718,7 +1733,7 @@ class EnhancedInvitationView(APIView):
                     role=data["role"],
                     is_invited=True,
                     email_verified=True,  # Skip email verification for invited users
-                    must_change_password=True,  # Flag to force password change on first login
+                    must_change_password=must_change_password,  # Gate keepers skip password change
                 )
 
                 # Send email with credentials

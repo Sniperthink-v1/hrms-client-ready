@@ -29,8 +29,12 @@ const refreshAuthToken = async (): Promise<boolean> => {
 
       if (response.ok) {
         const data: AuthResponse = await response.json();
+        if (typeof data.access !== 'string') {
+          console.error('Invalid refresh access token:', data);
+          return false;
+        }
         await storage.setAccessToken(data.access);
-        if (data.refresh) await storage.setRefreshToken(data.refresh);
+        if (typeof data.refresh === 'string') await storage.setRefreshToken(data.refresh);
         if (data.session_key) await storage.setSessionKey(data.session_key);
         return true;
       }

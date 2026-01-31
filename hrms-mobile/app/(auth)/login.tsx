@@ -11,13 +11,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Dimensions,
+  useWindowDimensions,
   Modal,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useAppDispatch } from '@/store/hooks';
-import { setUser, setTenant } from '@/store/slices/authSlice';
+import { logout, setUser, setTenant } from '@/store/slices/authSlice';
 import { authService, LoginCredentials } from '@/services/authService';
 import { storage } from '@/utils/storage';
 import Colors from '@/constants/Colors';
@@ -25,20 +25,21 @@ import { useColorScheme } from '@/components/useColorScheme';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import SniperThinkLogo from '@/components/SniperThinkLogo';
 
-const { width, height } = Dimensions.get('window');
-
 export default function LoginScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const dispatch = useAppDispatch();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const { width: windowWidth } = useWindowDimensions();
+  const isDesktopWeb = Platform.OS === 'web' && windowWidth >= 768;
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [gateKeeperDesktopMessage, setGateKeeperDesktopMessage] = useState<string | null>(null);
   
   // Forced PIN setup modal state
   const [showForcedPINModal, setShowForcedPINModal] = useState(false);
@@ -67,6 +68,15 @@ export default function LoginScreen() {
   // Ref to track if we're coming from logout (prevents API calls)
   const isLoggingOut = useRef(false);
   const sessionCheckInProgress = useRef(false);
+
+  const blockGateKeeperOnDesktop = async () => {
+    setGateKeeperDesktopMessage('Gate Keeper accounts are only available on mobile devices.');
+    dispatch(logout());
+    await storage.clearAll();
+    setCheckingSession(false);
+    setLoading(false);
+    await SplashScreen.hideAsync();
+  };
 
   // Check for existing session on mount (skip if coming from logout)
   useEffect(() => {
@@ -172,6 +182,20 @@ export default function LoginScreen() {
           dispatch(setUser(savedUser));
           dispatch(setTenant(savedTenant));
           router.replace('/(drawer)');
+          setCheckingSession(false);
+          return;
+        }
+
+        // Gate keeper accounts are mobile-only and skip PIN
+        if (savedUser.role === 'gate_keeper') {
+          if (isDesktopWeb) {
+            await blockGateKeeperOnDesktop();
+            return;
+          }
+          await SplashScreen.hideAsync();
+          dispatch(setUser(savedUser));
+          dispatch(setTenant(savedTenant));
+          router.replace('/face-attendance');
           setCheckingSession(false);
           return;
         }
@@ -366,6 +390,19 @@ export default function LoginScreen() {
           dispatch(setTenant(response.tenant));
         }
         router.replace('/(drawer)');
+        setLoading(false);
+        return;
+      }
+
+      // Gate keeper accounts are mobile-only and skip PIN
+      if (response.user?.role === 'gate_keeper') {
+        if (isDesktopWeb) {
+          await blockGateKeeperOnDesktop();
+          return;
+        }
+        dispatch(setUser(response.user));
+        dispatch(setTenant(response.tenant));
+        router.replace('/face-attendance');
         setLoading(false);
         return;
       }
@@ -611,6 +648,15 @@ export default function LoginScreen() {
             </Text>
           </View>
 
+          {gateKeeperDesktopMessage && (
+            <View style={[styles.banner, { backgroundColor: colors.warning + '20', borderColor: colors.warning }]}>
+              <FontAwesome name="info-circle" size={18} color={colors.warning} />
+              <Text style={[styles.bannerText, { color: colors.text }]}>
+                {gateKeeperDesktopMessage}
+              </Text>
+            </View>
+          )}
+
           {/* Login Form */}
           <View style={styles.form}>
             {/* Email Input */}
@@ -814,6 +860,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
+  banner: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 24,
+  },
+  bannerText: {
+    fontSize: 14,
+    fontWeight: '500',
+    flex: 1,
+  },
   form: {
     width: '100%',
   },
@@ -991,4 +1052,3 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
 });
-

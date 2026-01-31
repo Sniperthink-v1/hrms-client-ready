@@ -81,6 +81,14 @@ const HRUserInvitation: React.FC = () => {
       can_manage_payroll: true,
       can_export_data: true,
       can_access_settings: true
+    },
+    gate_keeper: {
+      can_view: true,
+      can_modify: false,
+      can_invite_users: false,
+      can_manage_payroll: false,
+      can_export_data: false,
+      can_access_settings: false
     }
   };
 
@@ -289,6 +297,11 @@ const HRUserInvitation: React.FC = () => {
       value: 'payroll_master', 
       label: 'Payroll Master',
       description: 'Payroll management access - Can manage all employees, payroll, and settings (cannot invite users or delete account)'
+    },
+    { 
+      value: 'gate_keeper', 
+      label: 'Gate Keeper',
+      description: 'Mobile-only face attendance role - Access restricted to face recognition on mobile'
     }
   ];
 

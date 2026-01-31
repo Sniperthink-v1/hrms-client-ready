@@ -45,6 +45,18 @@ export const authService = {
         client_type: 'mobile', // Indicate mobile client to backend
       });
 
+      if ((response as any)?.must_change_password) {
+        throw new Error('Password change required. Please reset your password before logging in.');
+      }
+
+      if (
+        typeof response.access !== 'string' ||
+        typeof response.refresh !== 'string'
+      ) {
+        console.error('Invalid login response tokens:', response);
+        throw new Error('Invalid login response. Please try again.');
+      }
+
       // Store tokens and user data
       await storage.setAccessToken(response.access);
       await storage.setRefreshToken(response.refresh);
@@ -173,4 +185,3 @@ export const authService = {
 };
 
 export default authService;
-

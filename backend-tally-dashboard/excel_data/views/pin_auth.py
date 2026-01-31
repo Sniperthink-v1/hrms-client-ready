@@ -295,6 +295,13 @@ class PINStatusView(APIView):
         user = request.user
         
         try:
+            if getattr(user, 'role', None) == 'gate_keeper':
+                return Response({
+                    'has_pin': False,
+                    'pin_enabled': False,
+                    'is_locked': False,
+                    'locked_until': None
+                })
             # Check if user has PIN setup
             has_pin = hasattr(user, 'pin_auth')
             is_enabled = has_pin and user.pin_auth.is_enabled
@@ -344,6 +351,14 @@ class CheckPINRequiredView(APIView):
                     'pin_required': False,
                     'email': email,
                     'is_superuser': True
+                })
+
+            # Gate keepers do not require PIN verification
+            if getattr(user, 'role', None) == 'gate_keeper':
+                return Response({
+                    'pin_required': False,
+                    'email': email,
+                    'is_superuser': False
                 })
             
             # Check if user has PIN enabled

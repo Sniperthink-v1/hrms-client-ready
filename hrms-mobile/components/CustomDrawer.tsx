@@ -77,6 +77,7 @@ export default function CustomDrawer(props: any) {
   const insets = useSafeAreaInsets();
 
   const [faceAttendanceEnabled, setFaceAttendanceEnabled] = useState(false);
+  const isGateKeeper = user?.role === 'gate_keeper';
 
   // Fetch face attendance config
   useEffect(() => {
@@ -133,19 +134,21 @@ export default function CustomDrawer(props: any) {
     );
   };
 
-  const menuItems = [
-    { icon: 'dashboard', label: 'Dashboard', route: '/(drawer)/' },
-    { icon: 'users', label: 'Employees', route: '/(drawer)/employees' },
-    { icon: 'calendar', label: 'Attendance', route: '/(drawer)/attendance' },
-    ...(faceAttendanceEnabled ? [{ icon: 'camera', label: 'Face Attendance', route: '/face-attendance' }] : []),
-    { icon: 'dollar', label: 'Payroll', route: '/(drawer)/payroll' },
-    { icon: 'calendar-check-o', label: 'Holidays', route: '/holidays' },
-    { icon: 'group', label: 'Team', route: '/team' },
-    { icon: 'upload', label: 'Upload', route: '/upload' },
-    { icon: 'life-ring', label: 'Support', route: '/support' },
-    { icon: 'cog', label: 'Settings', route: '/settings' },
-    { icon: 'info-circle', label: 'About', route: '/(drawer)/about' },
-  ];
+  const menuItems = isGateKeeper
+    ? [{ icon: 'camera', label: 'Face Attendance', route: '/face-attendance' }]
+    : [
+        { icon: 'dashboard', label: 'Dashboard', route: '/(drawer)/' },
+        { icon: 'users', label: 'Employees', route: '/(drawer)/employees' },
+        { icon: 'calendar', label: 'Attendance', route: '/(drawer)/attendance' },
+        ...(faceAttendanceEnabled ? [{ icon: 'camera', label: 'Face Attendance', route: '/face-attendance' }] : []),
+        { icon: 'dollar', label: 'Payroll', route: '/(drawer)/payroll' },
+        { icon: 'calendar-check-o', label: 'Holidays', route: '/holidays' },
+        { icon: 'group', label: 'Team', route: '/team' },
+        { icon: 'upload', label: 'Upload', route: '/upload' },
+        { icon: 'life-ring', label: 'Support', route: '/support' },
+        { icon: 'cog', label: 'Settings', route: '/settings' },
+        { icon: 'info-circle', label: 'About', route: '/(drawer)/about' },
+      ];
 
   return (
     <View style={[styles.container, { backgroundColor: colors.surface, paddingBottom: insets.bottom }]}>
@@ -181,60 +184,81 @@ export default function CustomDrawer(props: any) {
 
       {/* Menu Items */}
       <ScrollView style={styles.menuContainer} showsVerticalScrollIndicator={false}>
-        <View style={styles.menuSection}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-            MAIN MENU
-          </Text>
-          {menuItems.slice(0, 4).map((item) => (
-            <DrawerItem
-              key={item.route}
-              icon={item.icon}
-              label={item.label}
-              route={item.route}
-              isActive={pathname === item.route || pathname.startsWith(item.route)}
-              onPress={() => router.push(item.route as any)}
-              colors={colors}
-            />
-          ))}
-        </View>
+        {isGateKeeper ? (
+          <View style={styles.menuSection}>
+            <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+              MAIN MENU
+            </Text>
+            {menuItems.map((item) => (
+              <DrawerItem
+                key={item.route}
+                icon={item.icon}
+                label={item.label}
+                route={item.route}
+                isActive={pathname === item.route || pathname.startsWith(item.route)}
+                onPress={() => router.push(item.route as any)}
+                colors={colors}
+              />
+            ))}
+          </View>
+        ) : (
+          <>
+            <View style={styles.menuSection}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                MAIN MENU
+              </Text>
+              {menuItems.slice(0, 4).map((item) => (
+                <DrawerItem
+                  key={item.route}
+                  icon={item.icon}
+                  label={item.label}
+                  route={item.route}
+                  isActive={pathname === item.route || pathname.startsWith(item.route)}
+                  onPress={() => router.push(item.route as any)}
+                  colors={colors}
+                />
+              ))}
+            </View>
 
-        <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
+            <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
 
-        <View style={styles.menuSection}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-            MANAGEMENT
-          </Text>
-          {menuItems.slice(4, 7).map((item) => (
-            <DrawerItem
-              key={item.route}
-              icon={item.icon}
-              label={item.label}
-              route={item.route}
-              isActive={pathname === item.route || pathname.startsWith(item.route)}
-              onPress={() => router.push(item.route as any)}
-              colors={colors}
-            />
-          ))}
-        </View>
+            <View style={styles.menuSection}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                MANAGEMENT
+              </Text>
+              {menuItems.slice(4, 7).map((item) => (
+                <DrawerItem
+                  key={item.route}
+                  icon={item.icon}
+                  label={item.label}
+                  route={item.route}
+                  isActive={pathname === item.route || pathname.startsWith(item.route)}
+                  onPress={() => router.push(item.route as any)}
+                  colors={colors}
+                />
+              ))}
+            </View>
 
-        <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
+            <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
 
-        <View style={styles.menuSection}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-            OTHER
-          </Text>
-          {menuItems.slice(7).map((item) => (
-            <DrawerItem
-              key={item.route}
-              icon={item.icon}
-              label={item.label}
-              route={item.route}
-              isActive={pathname === item.route || pathname.startsWith(item.route)}
-              onPress={() => router.push(item.route as any)}
-              colors={colors}
-            />
-          ))}
-        </View>
+            <View style={styles.menuSection}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                OTHER
+              </Text>
+              {menuItems.slice(7).map((item) => (
+                <DrawerItem
+                  key={item.route}
+                  icon={item.icon}
+                  label={item.label}
+                  route={item.route}
+                  isActive={pathname === item.route || pathname.startsWith(item.route)}
+                  onPress={() => router.push(item.route as any)}
+                  colors={colors}
+                />
+              ))}
+            </View>
+          </>
+        )}
       </ScrollView>
 
       {/* Footer */}

@@ -13,6 +13,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFaceDetection } from '@infinitered/react-native-mlkit-face-detection';
 import { useTensorflowModel } from 'react-native-fast-tflite';
 import { generateFaceEmbedding, FaceFrame } from '@/utils/faceEmbedding';
+import { useAppSelector } from '@/store/hooks';
 
 const RecognitionCamera = React.memo(
   ({
@@ -41,15 +42,20 @@ export default function FaceAttendanceScreen() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const { user, tenant } = useAppSelector((state) => state.auth);
+  const isGateKeeper = user?.role === 'gate_keeper';
 
   // Sub-tab state
-  const [activeSubTab, setActiveSubTab] = useState<'check-log' | 'registration' | 'recognition'>('check-log');
+  const [activeSubTab, setActiveSubTab] = useState<'check-log' | 'registration' | 'recognition'>(
+    isGateKeeper ? 'recognition' : 'check-log'
+  );
   const [employees, setEmployees] = useState<ActiveEmployeeListItem[]>([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [registering, setRegistering] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [captureMode, setCaptureMode] = useState<'clock_in' | 'clock_out'>('clock_in');
+  const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('front');
   const [sessionActive, setSessionActive] = useState(false);
   const [captureInProgress, setCaptureInProgress] = useState(false);
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
@@ -74,6 +80,9 @@ export default function FaceAttendanceScreen() {
   const embeddingModel = embeddingPlugin.state === 'loaded' ? embeddingPlugin.model : undefined;
 
   useEffect(() => {
+    if (isGateKeeper) {
+      return;
+    }
     const loadEmployees = async () => {
       setEmployeesLoading(true);
       try {
@@ -108,7 +117,13 @@ export default function FaceAttendanceScreen() {
     };
 
     loadLogs();
-  }, []);
+  }, [isGateKeeper]);
+
+  useEffect(() => {
+    if (isGateKeeper && activeSubTab !== 'recognition') {
+      setActiveSubTab('recognition');
+    }
+  }, [activeSubTab, isGateKeeper]);
 
   const employeeOptions = employees.map((employee) => ({
     value: employee.id.toString(),
@@ -715,6 +730,131 @@ export default function FaceAttendanceScreen() {
     );
   };
 
+  const renderGateKeeperRecognition = () => {
+    if (!cameraPermission?.granted) {
+      return (
+        <View style={styles.gateKeeperPermission}>
+          <FontAwesome name="camera" size={40} color={colors.textSecondary} />
+          <Text style={[styles.permissionText, { color: colors.textSecondary }]}>
+            Camera access is required to run face recognition.
+          </Text>
+          <TouchableOpacity
+            style={[styles.saveButton, { backgroundColor: colors.primary }]}
+            onPress={requestCameraAccess}
+          >
+            <Text style={[styles.saveButtonText, { color: 'white' }]}>Grant Camera Access</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.gateKeeperContainer}>
+        <CameraView
+          ref={cameraRef}
+          style={styles.gateKeeperCamera}
+          facing={cameraFacing}
+          active
+          animateShutter={false}
+        />
+        <View style={styles.gateKeeperOverlay}>
+          <View style={[styles.gateKeeperTopBar, { backgroundColor: colors.primary + 'CC' }]}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.gateKeeperBackButton}>
+              <FontAwesome name="arrow-left" size={18} color="white" />
+            </TouchableOpacity>
+            <View style={styles.gateKeeperTitleBlock}>
+              <Text style={styles.gateKeeperTitle}>Face Recognition</Text>
+              {tenant?.name ? (
+                <Text style={styles.gateKeeperSubtitle}>{tenant.name}</Text>
+              ) : null}
+            </View>
+            <TouchableOpacity
+              onPress={() => setCameraFacing(prev => (prev === 'front' ? 'back' : 'front'))}
+              style={styles.gateKeeperFlipButton}
+            >
+              <FontAwesome name="refresh" size={18} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.gateKeeperBottomBar, { backgroundColor: colors.surface + 'E6', borderColor: colors.border }]}>
+            <View style={styles.modeToggleRow}>
+              <TouchableOpacity
+                style={[
+                  styles.modeButton,
+                  {
+                    backgroundColor: captureMode === 'clock_in' ? colors.primary : colors.surface,
+                    borderColor: colors.primary,
+                  },
+                ]}
+                onPress={() => setCaptureMode('clock_in')}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    { color: captureMode === 'clock_in' ? 'white' : colors.primary },
+                  ]}
+                >
+                  Clock In
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modeButton,
+                  {
+                    backgroundColor: captureMode === 'clock_out' ? colors.primary : colors.surface,
+                    borderColor: colors.primary,
+                  },
+                ]}
+                onPress={() => setCaptureMode('clock_out')}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    { color: captureMode === 'clock_out' ? 'white' : colors.primary },
+                  ]}
+                >
+                  Clock Out
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.sessionRow}>
+              <TouchableOpacity
+                style={[
+                  styles.saveButton,
+                  { backgroundColor: sessionActive ? colors.error : colors.primary },
+                ]}
+                onPress={() => setSessionActive((prev) => !prev)}
+              >
+                <Text style={[styles.saveButtonText, { color: 'white' }]}>
+                  {sessionActive ? 'Stop Auto Capture' : 'Start Auto Capture'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.secondaryButton, { borderColor: colors.border }]}
+                onPress={handleManualCapture}
+                disabled={captureInProgress}
+              >
+                <Text style={[styles.secondaryButtonText, { color: colors.text }]}>Capture Now</Text>
+              </TouchableOpacity>
+            </View>
+
+            {lastRecognition && (
+              <View style={[styles.recognitionStatus, { borderColor: colors.border }]}>
+                <Text style={[styles.recognitionTime, { color: colors.textSecondary }]}>
+                  {lastRecognition.timestamp}
+                </Text>
+                <Text style={[styles.recognitionMessage, { color: colors.text }]}>
+                  {lastRecognition.message}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {toast && (
@@ -727,48 +867,55 @@ export default function FaceAttendanceScreen() {
           <Text style={styles.toastText}>{toast.message}</Text>
         </View>
       )}
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.primary }]}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <FontAwesome name="arrow-left" size={20} color="white" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Face Attendance</Text>
-        <View style={{ width: 40 }} />
-      </View>
 
-      {/* Sub-tabs */}
-      <View style={[styles.subTabContainer, { backgroundColor: colors.surface }]}>
-        <TouchableOpacity
-          style={[styles.subTab, activeSubTab === 'check-log' && [styles.activeSubTab, { borderBottomColor: colors.primary }]]}
-          onPress={() => setActiveSubTab('check-log')}
-        >
-          <FontAwesome name="clock-o" size={16} color={activeSubTab === 'check-log' ? colors.primary : colors.textSecondary} />
-          <Text style={[styles.subTabText, { color: activeSubTab === 'check-log' ? colors.primary : colors.textSecondary }]}>Check Log</Text>
-        </TouchableOpacity>
+      {isGateKeeper ? (
+        renderGateKeeperRecognition()
+      ) : (
+        <>
+          {/* Header */}
+          <View style={[styles.header, { backgroundColor: colors.primary }]}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+              <FontAwesome name="arrow-left" size={20} color="white" />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Face Attendance</Text>
+            <View style={{ width: 40 }} />
+          </View>
 
-        <TouchableOpacity
-          style={[styles.subTab, activeSubTab === 'registration' && [styles.activeSubTab, { borderBottomColor: colors.primary }]]}
-          onPress={() => setActiveSubTab('registration')}
-        >
-          <FontAwesome name="user-plus" size={16} color={activeSubTab === 'registration' ? colors.primary : colors.textSecondary} />
-          <Text style={[styles.subTabText, { color: activeSubTab === 'registration' ? colors.primary : colors.textSecondary }]}>Registration</Text>
-        </TouchableOpacity>
+          {/* Sub-tabs */}
+          <View style={[styles.subTabContainer, { backgroundColor: colors.surface }]}>
+            <TouchableOpacity
+              style={[styles.subTab, activeSubTab === 'check-log' && [styles.activeSubTab, { borderBottomColor: colors.primary }]]}
+              onPress={() => setActiveSubTab('check-log')}
+            >
+              <FontAwesome name="clock-o" size={16} color={activeSubTab === 'check-log' ? colors.primary : colors.textSecondary} />
+              <Text style={[styles.subTabText, { color: activeSubTab === 'check-log' ? colors.primary : colors.textSecondary }]}>Check Log</Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.subTab, activeSubTab === 'recognition' && [styles.activeSubTab, { borderBottomColor: colors.primary }]]}
-          onPress={() => setActiveSubTab('recognition')}
-        >
-          <FontAwesome name="eye" size={16} color={activeSubTab === 'recognition' ? colors.primary : colors.textSecondary} />
-          <Text style={[styles.subTabText, { color: activeSubTab === 'recognition' ? colors.primary : colors.textSecondary }]}>Recognition</Text>
-        </TouchableOpacity>
-      </View>
+            <TouchableOpacity
+              style={[styles.subTab, activeSubTab === 'registration' && [styles.activeSubTab, { borderBottomColor: colors.primary }]]}
+              onPress={() => setActiveSubTab('registration')}
+            >
+              <FontAwesome name="user-plus" size={16} color={activeSubTab === 'registration' ? colors.primary : colors.textSecondary} />
+              <Text style={[styles.subTabText, { color: activeSubTab === 'registration' ? colors.primary : colors.textSecondary }]}>Registration</Text>
+            </TouchableOpacity>
 
-      {/* Content */}
-      <ScrollView style={styles.content}>
-        {activeSubTab === 'check-log' && renderFaceCheckLog()}
-        {activeSubTab === 'registration' && renderFaceRegistration()}
-        {activeSubTab === 'recognition' && renderFaceRecognition()}
-      </ScrollView>
+            <TouchableOpacity
+              style={[styles.subTab, activeSubTab === 'recognition' && [styles.activeSubTab, { borderBottomColor: colors.primary }]]}
+              onPress={() => setActiveSubTab('recognition')}
+            >
+              <FontAwesome name="eye" size={16} color={activeSubTab === 'recognition' ? colors.primary : colors.textSecondary} />
+              <Text style={[styles.subTabText, { color: activeSubTab === 'recognition' ? colors.primary : colors.textSecondary }]}>Recognition</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Content */}
+          <ScrollView style={styles.content}>
+            {activeSubTab === 'check-log' && renderFaceCheckLog()}
+            {activeSubTab === 'registration' && renderFaceRegistration()}
+            {activeSubTab === 'recognition' && renderFaceRecognition()}
+          </ScrollView>
+        </>
+      )}
     </View>
   );
 }
@@ -970,6 +1117,57 @@ const styles = StyleSheet.create({
   cameraPreview: {
     width: '100%',
     height: 280,
+  },
+  gateKeeperContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  gateKeeperCamera: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  gateKeeperOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'space-between',
+  },
+  gateKeeperTopBar: {
+    paddingTop: 50,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  gateKeeperBottomBar: {
+    padding: 16,
+    borderTopWidth: 1,
+  },
+  gateKeeperTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'white',
+  },
+  gateKeeperTitleBlock: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  gateKeeperSubtitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.85)',
+    marginTop: 2,
+  },
+  gateKeeperBackButton: {
+    padding: 8,
+  },
+  gateKeeperFlipButton: {
+    padding: 8,
+  },
+  gateKeeperPermission: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    gap: 12,
   },
   sessionRow: {
     gap: 12,

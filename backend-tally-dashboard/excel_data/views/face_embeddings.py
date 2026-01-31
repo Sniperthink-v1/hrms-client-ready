@@ -315,7 +315,7 @@ class FaceEmbeddingVerifyView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    DEFAULT_THRESHOLD = 0.55  # can be tuned per-tenant later
+    DEFAULT_THRESHOLD = 0.65
 
     def post(self, request, *args, **kwargs):
         tenant = getattr(request, "tenant", None)

@@ -84,6 +84,7 @@ class CustomUser(AbstractUser):
         ('admin', 'Admin'),
         ('hr_manager', 'HR Manager'),
         ('payroll_master', 'Payroll Master'),
+        ('gate_keeper', 'Gate Keeper'),
         ('supervisor', 'Supervisor'),
         ('employee', 'Employee'),
     ]

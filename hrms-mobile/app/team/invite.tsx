@@ -24,7 +24,7 @@ export default function InviteUserScreen() {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     email: '',
-    role: 'employee' as 'admin' | 'hr_manager' | 'payroll_master' | 'supervisor' | 'employee',
+    role: 'employee' as 'admin' | 'hr_manager' | 'payroll_master' | 'supervisor' | 'employee' | 'gate_keeper',
   });
 
   const handleSubmit = async () => {
@@ -78,7 +78,7 @@ export default function InviteUserScreen() {
           <View style={styles.inputGroup}>
             <Text style={[styles.label, { color: colors.text }]}>Role *</Text>
             <View style={styles.roleButtons}>
-              {(['admin', 'hr_manager', 'payroll_master', 'supervisor', 'employee'] as const).map((role) => (
+              {(['admin', 'hr_manager', 'payroll_master', 'supervisor', 'employee', 'gate_keeper'] as const).map((role) => (
                 <TouchableOpacity
                   key={role}
                   style={[
@@ -212,4 +212,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

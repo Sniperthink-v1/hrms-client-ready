@@ -78,6 +78,7 @@ export default function TeamManagementScreen() {
       case 'admin': return colors.primary;
       case 'hr_manager': return colors.info;
       case 'payroll_master': return colors.warning;
+      case 'gate_keeper': return colors.success;
       default: return colors.textSecondary;
     }
   };
@@ -278,4 +279,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

@@ -18,7 +18,7 @@ export interface CustomUser {
   email: string;
   first_name: string;
   last_name: string;
-  role: 'admin' | 'hr_manager' | 'payroll_master' | 'supervisor' | 'employee';
+  role: 'admin' | 'hr_manager' | 'payroll_master' | 'supervisor' | 'employee' | 'gate_keeper';
   is_superuser: boolean;
   is_admin: boolean;
   tenant: Tenant;
@@ -329,4 +329,3 @@ export interface APIError {
   logout_required?: boolean;
   reason?: string;
 }
-
