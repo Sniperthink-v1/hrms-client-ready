@@ -83,6 +83,11 @@ from .face_log import (
     FaceAttendanceLog,
 )
 
+# Face embeddings
+from .face_embedding import (
+    FaceEmbedding,
+)
+
 # Pending attendance retries
 from .pending_attendance import (
     PendingAttendanceUpdate,
@@ -143,5 +148,6 @@ __all__ = [
     
     # Face attendance
     'FaceAttendanceLog',
+    'FaceEmbedding',
     'PendingAttendanceUpdate',
 ]

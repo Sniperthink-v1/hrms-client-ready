@@ -1,6 +1,6 @@
 // Face Attendance Screen - Dedicated screen for face attendance features
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, BackHandler, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Colors from '@/constants/Colors';
@@ -13,7 +13,10 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFaceDetection } from '@infinitered/react-native-mlkit-face-detection';
 import { useTensorflowModel } from 'react-native-fast-tflite';
 import { generateFaceEmbedding, FaceFrame } from '@/utils/faceEmbedding';
-import { useAppSelector } from '@/store/hooks';
+import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { logout } from '@/store/slices/authSlice';
+import { authService } from '@/services/authService';
+import { storage } from '@/utils/storage';
 
 const RecognitionCamera = React.memo(
   ({
@@ -42,6 +45,7 @@ export default function FaceAttendanceScreen() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const dispatch = useAppDispatch();
   const { user, tenant } = useAppSelector((state) => state.auth);
   const isGateKeeper = user?.role === 'gate_keeper';
 
@@ -78,6 +82,59 @@ export default function FaceAttendanceScreen() {
   const faceDetector = useFaceDetection();
   const embeddingPlugin = useTensorflowModel(require('../assets/models/mobilefacenet.tflite'));
   const embeddingModel = embeddingPlugin.state === 'loaded' ? embeddingPlugin.model : undefined;
+
+  useEffect(() => {
+    if (!isGateKeeper) {
+      return;
+    }
+
+    const handleHardwareBack = () => {
+      if (Platform.OS === 'android') {
+        BackHandler.exitApp();
+        return true;
+      }
+      Alert.alert('Exit', 'Please use Logout to exit the app.');
+      return true;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleHardwareBack);
+    return () => subscription.remove();
+  }, [isGateKeeper]);
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              dispatch(logout());
+              await authService.logout();
+              await storage.clearAll();
+              router.replace('/(auth)/login?logout=true');
+            } catch (error) {
+              console.error('Logout failed:', error);
+              dispatch(logout());
+              await storage.clearAll();
+              router.replace('/(auth)/login?logout=true');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleGateKeeperBack = () => {
+    if (Platform.OS === 'android') {
+      BackHandler.exitApp();
+      return;
+    }
+    Alert.alert('Exit', 'Please use Logout to exit the app.');
+  };
 
   useEffect(() => {
     if (isGateKeeper) {
@@ -759,7 +816,7 @@ export default function FaceAttendanceScreen() {
         />
         <View style={styles.gateKeeperOverlay}>
           <View style={[styles.gateKeeperTopBar, { backgroundColor: colors.primary + 'CC' }]}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.gateKeeperBackButton}>
+            <TouchableOpacity onPress={handleGateKeeperBack} style={styles.gateKeeperBackButton}>
               <FontAwesome name="arrow-left" size={18} color="white" />
             </TouchableOpacity>
             <View style={styles.gateKeeperTitleBlock}>
@@ -768,12 +825,20 @@ export default function FaceAttendanceScreen() {
                 <Text style={styles.gateKeeperSubtitle}>{tenant.name}</Text>
               ) : null}
             </View>
-            <TouchableOpacity
-              onPress={() => setCameraFacing(prev => (prev === 'front' ? 'back' : 'front'))}
-              style={styles.gateKeeperFlipButton}
-            >
-              <FontAwesome name="refresh" size={18} color="white" />
-            </TouchableOpacity>
+            <View style={styles.gateKeeperActions}>
+              <TouchableOpacity
+                onPress={() => setCameraFacing(prev => (prev === 'front' ? 'back' : 'front'))}
+                style={styles.gateKeeperFlipButton}
+              >
+                <FontAwesome name="refresh" size={18} color="white" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleLogout}
+                style={styles.gateKeeperLogoutButton}
+              >
+                <FontAwesome name="sign-out" size={18} color="white" />
+              </TouchableOpacity>
+            </View>
           </View>
 
           <View style={[styles.gateKeeperBottomBar, { backgroundColor: colors.surface + 'E6', borderColor: colors.border }]}>
@@ -1159,7 +1224,15 @@ const styles = StyleSheet.create({
   gateKeeperBackButton: {
     padding: 8,
   },
+  gateKeeperActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   gateKeeperFlipButton: {
+    padding: 8,
+  },
+  gateKeeperLogoutButton: {
     padding: 8,
   },
   gateKeeperPermission: {
