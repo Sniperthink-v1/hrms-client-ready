@@ -84,6 +84,12 @@ class Tenant(models.Model):
         default=False,
         help_text="Enable face attendance feature for this tenant"
     )
+
+    # Face embedding cache version (bump on register/update)
+    embedding_cache_version = models.PositiveIntegerField(
+        default=0,
+        help_text="Version for invalidating per-tenant embedding cache"
+    )
     
     class Meta:
         app_label = 'excel_data'

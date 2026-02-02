@@ -183,11 +183,15 @@ class ExcelDataConfig(AppConfig):
             # Production mode - start schedulers
             from excel_data.credit_scheduler import start_credit_scheduler
             from excel_data.account_deletion_scheduler import start_account_deletion_scheduler
+            from excel_data.attendance_retry_worker import start_pending_attendance_worker
             start_credit_scheduler()
             start_account_deletion_scheduler()
+            start_pending_attendance_worker()
         elif os.environ.get('RUN_MAIN') == 'true' and settings.DEBUG:
             # Development mode with reloader - start in reloaded process
             from excel_data.credit_scheduler import start_credit_scheduler
             from excel_data.account_deletion_scheduler import start_account_deletion_scheduler
+            from excel_data.attendance_retry_worker import start_pending_attendance_worker
             start_credit_scheduler()
             start_account_deletion_scheduler()
+            start_pending_attendance_worker()

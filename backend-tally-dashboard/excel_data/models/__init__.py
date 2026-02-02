@@ -83,6 +83,11 @@ from .face_log import (
     FaceAttendanceLog,
 )
 
+# Pending attendance retries
+from .pending_attendance import (
+    PendingAttendanceUpdate,
+)
+
 # Define all models to be imported via 'from excel_data.models import *'
 __all__ = [
     # Tenant Models
@@ -138,4 +143,5 @@ __all__ = [
     
     # Face attendance
     'FaceAttendanceLog',
+    'PendingAttendanceUpdate',
 ]

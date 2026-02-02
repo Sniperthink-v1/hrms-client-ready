@@ -3,33 +3,21 @@ from typing import List, Optional
 import logging
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import QuerySet
-from django.core.cache import cache
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from ..models import EmployeeProfile, DailyAttendance
+from ..models import EmployeeProfile
 from ..models.face_embedding import FaceEmbedding
 from ..models.face_log import FaceAttendanceLog
-from ..utils.face_embedding_crypto import encrypt_embedding, decrypt_embedding
+from ..models.pending_attendance import PendingAttendanceUpdate
+from ..utils.face_embedding_crypto import encrypt_embedding
+from ..utils.face_embedding_cache import get_cached_embeddings, clear_tenant_cache
+from ..utils.face_attendance import is_off_day, mark_face_attendance
 
 
 logger = logging.getLogger(__name__)
-
-def _is_off_day(employee: EmployeeProfile, target_date) -> bool:
-    day_of_week = target_date.weekday()
-    return (
-        (day_of_week == 0 and employee.off_monday)
-        or (day_of_week == 1 and employee.off_tuesday)
-        or (day_of_week == 2 and employee.off_wednesday)
-        or (day_of_week == 3 and employee.off_thursday)
-        or (day_of_week == 4 and employee.off_friday)
-        or (day_of_week == 5 and employee.off_saturday)
-        or (day_of_week == 6 and employee.off_sunday)
-    )
-
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
     """
@@ -43,135 +31,6 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
         dot += float(x) * float(y)
     # Since embeddings are already normalized, the denominator is ~1.
     return float(dot)
-
-
-def _mark_face_attendance(tenant, employee: EmployeeProfile, mode: str) -> None:
-    """
-    Create or update DailyAttendance for this employee based on face recognition.
-
-    - mode == 'clock_in'  -> NEVER overwrite existing check_in; only compute late/OT deltas
-    - mode == 'clock_out' -> NEVER overwrite existing check_out; only compute late/OT deltas
-    - For clock_in:
-        * If actual time < shift_start  => pre-shift OT
-        * If actual time > shift_start  => late minutes
-      For clock_out:
-        * If actual time > shift_end    => post-shift OT
-        * If actual time < shift_end    => shortfall counted as late minutes
-    """
-    import pytz
-    from datetime import date, datetime, timedelta
-    tz_name = getattr(tenant, "timezone", "UTC") or "UTC"
-    tz = pytz.timezone(tz_name) if tz_name in pytz.all_timezones else pytz.UTC
-    local_now = timezone.now().astimezone(tz)
-    today = local_now.date()
-    employee_id = employee.employee_id or str(employee.id)
-
-    try:
-        if _is_off_day(employee, today):
-            return
-        record, created = DailyAttendance.objects.get_or_create(
-            tenant=tenant,
-            employee_id=employee_id,
-            date=today,
-            defaults={
-                "employee_name": f"{employee.first_name} {employee.last_name}".strip(),
-                "department": employee.department or "General",
-                "designation": employee.designation or "",
-                "employment_type": employee.employment_type or "",
-                "attendance_status": "PRESENT",
-            },
-        )
-
-        now_local_time = local_now.time().replace(tzinfo=None)
-        shift_start = getattr(employee, "shift_start_time", None)
-        shift_end = getattr(employee, "shift_end_time", None)
-
-        # CLOCK IN LOGIC (do not overwrite existing check_in)
-        if mode == "clock_in":
-            # If this is the first clock-in, set it; otherwise keep original
-            if record.check_in is None:
-                record.check_in = now_local_time
-
-        # CLOCK OUT LOGIC (do not overwrite existing check_out)
-        if mode == "clock_out":
-            # If this is the first clock-out, set it; otherwise keep original
-            if record.check_out is None:
-                record.check_out = now_local_time
-
-        # Deterministic late_minutes + ot_hours calculation (no double counting across multiple scans)
-        # Uses stored check_in/check_out vs scheduled shift_start/shift_end
-        if shift_start and shift_end and (record.check_in or record.check_out):
-            shift_start_dt = datetime.combine(today, shift_start)
-            shift_end_dt = datetime.combine(today, shift_end)
-            if shift_end_dt <= shift_start_dt:
-                # Overnight shift
-                shift_end_dt = shift_end_dt + timedelta(days=1)
-
-            check_in_dt = None
-            if record.check_in:
-                check_in_dt = datetime.combine(today, record.check_in)
-                # Overnight shift: times after midnight belong to next day
-                if shift_end_dt.date() != shift_start_dt.date() and check_in_dt < shift_start_dt:
-                    check_in_dt = check_in_dt + timedelta(days=1)
-
-            check_out_dt = None
-            if record.check_out:
-                check_out_dt = datetime.combine(today, record.check_out)
-                if shift_end_dt.date() != shift_start_dt.date() and check_out_dt < shift_start_dt:
-                    check_out_dt = check_out_dt + timedelta(days=1)
-                if check_in_dt and check_out_dt < check_in_dt:
-                    check_out_dt = check_out_dt + timedelta(days=1)
-
-            # Late minutes:
-            # - late_in: after shift_start
-            # - early_out: before shift_end (requested to count as late minutes)
-            late_in_minutes = 0
-            if check_in_dt:
-                late_in_minutes = max(0, int((check_in_dt - shift_start_dt).total_seconds() // 60))
-            early_out_minutes = 0
-            if check_out_dt:
-                early_out_minutes = max(0, int((shift_end_dt - check_out_dt).total_seconds() // 60))
-            record.late_minutes = late_in_minutes + early_out_minutes
-
-            # OT hours:
-            # - early_in: before shift_start
-            # - late_out: after shift_end
-            ot_early = 0.0
-            if check_in_dt:
-                ot_early = max(0.0, (shift_start_dt - check_in_dt).total_seconds() / 3600.0)
-            ot_late = 0.0
-            if check_out_dt:
-                ot_late = max(0.0, (check_out_dt - shift_end_dt).total_seconds() / 3600.0)
-            record.ot_hours = round(ot_early + ot_late, 1)
-
-        # Ensure status present when either in/out has been marked
-        if record.check_in or record.check_out:
-            record.attendance_status = "PRESENT"
-
-        record.save()
-
-        # Invalidate lightweight attendance caches used by dashboard list view
-        cache_keys = [
-            f"attendance_list_{tenant.id}_offset_0_limit_50",
-            f"attendance_list_{tenant.id}_offset_0_limit_100",
-        ]
-        for key in cache_keys:
-            cache.delete(key)
-        # Also clear aggregated attendance caches used by all_records
-        try:
-            cache.delete_pattern(f"attendance_all_records_{tenant.id}_*")
-        except AttributeError:
-            cache.delete(f"attendance_all_records_{tenant.id}")
-
-    except Exception as exc:
-        # Do not break face verification if attendance write fails
-        logger.error(
-            "Failed to mark face attendance for employee %s (tenant %s): %s",
-            employee_id,
-            getattr(tenant, "id", None),
-            exc,
-            exc_info=True,
-        )
 
 
 class FaceEmbeddingRegisterView(APIView):
@@ -276,6 +135,17 @@ class FaceEmbeddingRegisterView(APIView):
                 obj.updated_at = timezone.now()
                 obj.save(update_fields=["embedding_encrypted", "updated_at"])
 
+        # Bump cache version and clear local cache for this tenant
+        try:
+            from django.db.models import F
+            from ..models import Tenant
+            Tenant.objects.filter(id=tenant.id).update(
+                embedding_cache_version=F("embedding_cache_version") + 1
+            )
+            clear_tenant_cache(tenant.id)
+        except Exception as exc:
+            logger.warning("Failed to bump embedding cache version for tenant %s: %s", tenant.id, exc)
+
         # Log successful registration
         try:
             FaceAttendanceLog.objects.create(
@@ -349,33 +219,26 @@ class FaceEmbeddingVerifyView(APIView):
         if not isinstance(embedding, list) or not embedding:
             return Response({"error": "embedding must be a non-empty list"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Fetch all embeddings for this tenant
-        qs: QuerySet[FaceEmbedding] = FaceEmbedding.objects.select_related("employee").filter(
-            tenant=tenant
-        )
-        if not qs.exists():
+        # Fetch cached embeddings for this tenant
+        cached_embeddings = get_cached_embeddings(tenant)
+        if not cached_embeddings:
             return Response(
                 {"recognized": False, "message": "No face registrations found for this tenant."},
                 status=status.HTTP_200_OK,
             )
 
         best_score: float = 0.0
-        best_obj: Optional[FaceEmbedding] = None
+        best_employee_id: Optional[int] = None
 
-        for obj in qs:
-            try:
-                stored = decrypt_embedding(obj.embedding_encrypted)
-            except Exception:
-                # Skip corrupted entries silently
-                continue
+        for employee_id, stored in cached_embeddings:
             score = _cosine_similarity(embedding, stored)
             if score > best_score:
                 best_score = score
-                best_obj = obj
+                best_employee_id = employee_id
 
         threshold = getattr(tenant, "face_similarity_threshold", self.DEFAULT_THRESHOLD)
 
-        if not best_obj or best_score < threshold:
+        if not best_employee_id or best_score < threshold:
             # Persist centralized face log for failures as well
             try:
                 FaceAttendanceLog.objects.create(
@@ -400,15 +263,38 @@ class FaceEmbeddingVerifyView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        employee = best_obj.employee
-        best_obj.last_used_at = timezone.now()
-        best_obj.save(update_fields=["last_used_at"])
+        employee = EmployeeProfile.objects.filter(id=best_employee_id, tenant=tenant).first()
+        if not employee:
+            try:
+                FaceAttendanceLog.objects.create(
+                    tenant=tenant,
+                    event_type="verification",
+                    mode=mode,
+                    recognized=False,
+                    confidence=float(best_score),
+                    message="Face matched to missing employee record.",
+                    source="mobile",
+                    event_time=timezone.now(),
+                )
+            except Exception:
+                pass
+            return Response(
+                {
+                    "recognized": False,
+                    "mode": mode,
+                    "confidence": float(best_score),
+                    "message": "Matched employee not found. Please contact support.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        FaceEmbedding.objects.filter(tenant=tenant, employee=employee).update(last_used_at=timezone.now())
 
         import pytz
         tz_name = getattr(tenant, "timezone", "UTC") or "UTC"
         tz = pytz.timezone(tz_name) if tz_name in pytz.all_timezones else pytz.UTC
         local_today = timezone.now().astimezone(tz).date()
-        if _is_off_day(employee, local_today):
+        if is_off_day(employee, local_today):
             try:
                 FaceAttendanceLog.objects.create(
                     tenant=tenant,
@@ -445,9 +331,26 @@ class FaceEmbeddingVerifyView(APIView):
 
         # Mark daily attendance so it reflects immediately in web + mobile dashboards
         try:
-            _mark_face_attendance(tenant, employee, mode)
+            mark_face_attendance(tenant, employee, mode, event_time=timezone.now())
         except Exception as exc:
-            # Already logged inside helper; keep response successful
+            # Enqueue for retry without blocking inference
+            try:
+                PendingAttendanceUpdate.objects.create(
+                    tenant=tenant,
+                    employee=employee,
+                    employee_identifier=employee.employee_id or str(employee.id),
+                    mode=mode,
+                    event_time=timezone.now(),
+                    source="mobile",
+                    status="pending",
+                    last_error=str(exc),
+                )
+            except Exception as enqueue_exc:
+                logger.warning(
+                    "Failed to enqueue pending attendance update for employee %s: %s",
+                    employee.employee_id,
+                    enqueue_exc,
+                )
             logger.warning(
                 "Face recognized but attendance update failed for employee %s: %s",
                 employee.employee_id,
